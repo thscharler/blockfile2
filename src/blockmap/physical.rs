@@ -3,9 +3,8 @@ use crate::blockmap::{
     block_io, BlockType, _INIT_HEADER_NR, _INIT_HEADER_PNR, _INIT_PHYSICAL_NR, _INIT_PHYSICAL_PNR,
     _INIT_TYPES_NR, _INIT_TYPES_PNR,
 };
-use crate::{Error, LogicalNr, PhysicalNr};
-use bitset_core::BitSet;
-use std::cmp::max;
+use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr};
+use bit_set::BitSet;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::mem::{align_of, size_of};
@@ -32,12 +31,16 @@ impl Physical {
     pub fn init(block_size: usize) -> Self {
         let block_0 = PhysicalBlock::init(block_size);
 
-        Self {
+        let mut new_self = Self {
             block_size,
             blocks: vec![block_0],
             max: PhysicalNr(0),
-            free: vec![],
-        }
+            free: Vec::default(),
+        };
+
+        new_self.init_free_list();
+
+        new_self
     }
 
     pub fn load(file: &mut File, block_size: usize, block_pnr: PhysicalNr) -> Result<Self, Error> {
@@ -53,18 +56,10 @@ impl Physical {
             free: vec![],
         };
 
-        let mut used_pnr: Vec<u64> = Vec::new();
         loop {
-            let next_pnr = new_self.physical_block(next);
+            let next_pnr = new_self.physical_block(next)?;
             let mut physical_block = PhysicalBlock::new(next, block_size);
             block_io::load_raw(file, next_pnr, physical_block.block_mut())?;
-
-            // build bitset of used blocks.
-            for v in physical_block.iter() {
-                if v.as_u32() != 0 {
-                    used_pnr.bit_set(v.as_usize());
-                }
-            }
 
             next = physical_block.next_nr();
 
@@ -75,22 +70,88 @@ impl Physical {
             }
         }
 
-        // free blocks.
-        for i in 0..used_pnr.bit_len() {
-            if !used_pnr.bit_test(i) {
-                new_self.free.push(PhysicalNr(i as u32));
-            } else {
-                new_self.max = PhysicalNr(i as u32);
-            }
-        }
+        new_self.init_free_list();
 
         Ok(new_self)
     }
 
-    pub fn physical_block(&self, logical: LogicalNr) -> PhysicalNr {
-        let map_idx = logical.as_u32() / PhysicalBlock::len_physical_g(self.block_size) as u32;
-        let map = self.blocks.get(map_idx as usize).expect("block-map");
-        map.physical(logical)
+    fn init_free_list(&mut self) {
+        let mut used_pnr = BitSet::new();
+
+        for physical_block in &self.blocks {
+            // build bitset of used blocks.
+            for (nr, pnr) in physical_block.iter_nr() {
+                if nr.as_u32() == 0 {
+                    used_pnr.insert(pnr.as_usize());
+                } else if pnr.as_u32() != 0 {
+                    used_pnr.insert(pnr.as_usize());
+                }
+            }
+        }
+
+        // find free blocks.
+        for i in 0..used_pnr.len() {
+            if !used_pnr.contains(i) {
+                self.free.push(PhysicalNr(i as u32));
+            } else {
+                self.max = PhysicalNr(i as u32);
+            }
+        }
+    }
+
+    /// Give back a free physical block.
+    pub fn find_free(&mut self) -> PhysicalNr {
+        if let Some(nr) = self.free.pop() {
+            nr
+        } else {
+            self.max += 1;
+            self.max
+        }
+    }
+
+    pub fn append_blockmap(&mut self, next_nr: LogicalNr) {
+        let last_block = self.blocks.last_mut().expect("last");
+        last_block.set_next_nr(next_nr);
+
+        let mut block = PhysicalBlock::new(next_nr, self.block_size);
+        let start_nr = self.max_nr();
+        block.set_start_nr(start_nr);
+        self.blocks.push(block);
+    }
+
+    pub fn free_block(&mut self, block_nr: LogicalNr) -> Result<(), Error> {
+        let Some(block) = self.map_mut(block_nr) else {
+            return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
+        };
+
+        let pnr = block.physical(block_nr)?;
+        block.set_physical(block_nr, PhysicalNr(0))?;
+        self.free.push(pnr);
+        Ok(())
+    }
+
+    /// Maximum currently adressable logical block.
+    fn max_nr(&self) -> LogicalNr {
+        let block = self.blocks.last().expect("last");
+        block.end_nr()
+    }
+
+    /// Find the physical block.
+    pub fn physical_block(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
+        let Some(map) = self.map(block_nr) else {
+            return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
+        };
+        Ok(map.physical(block_nr)?)
+    }
+
+    fn map(&self, block_nr: LogicalNr) -> Option<&PhysicalBlock> {
+        let map_idx = block_nr.as_u32() / PhysicalBlock::len_physical_g(self.block_size) as u32;
+        self.blocks.get(map_idx as usize)
+    }
+
+    fn map_mut(&mut self, block_nr: LogicalNr) -> Option<&mut PhysicalBlock> {
+        let map_idx = block_nr.as_u32() / PhysicalBlock::len_physical_g(self.block_size) as u32;
+        self.blocks.get_mut(map_idx as usize)
     }
 }
 
@@ -147,6 +208,11 @@ impl PhysicalBlock {
         self.data().start_nr
     }
 
+    pub fn set_start_nr(&mut self, start_nr: LogicalNr) {
+        self.data_mut().start_nr = start_nr;
+        self.0.set_dirty(true);
+    }
+
     pub fn end_nr(&self) -> LogicalNr {
         self.start_nr() + self.len_physical() as u32
     }
@@ -160,6 +226,34 @@ impl PhysicalBlock {
         self.0.set_dirty(true);
     }
 
+    pub fn iter_nr(&self) -> impl Iterator<Item = (LogicalNr, PhysicalNr)> + '_ {
+        struct NrIter<'a> {
+            idx: usize,
+            data: &'a BlockMapPhysical,
+        }
+        impl<'a> Iterator for NrIter<'a> {
+            type Item = (LogicalNr, PhysicalNr);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.idx >= self.data.physical.len() {
+                    None
+                } else {
+                    let v = (
+                        self.data.start_nr + self.idx as u32,
+                        self.data.physical[self.idx],
+                    );
+                    self.idx += 1;
+                    Some(v)
+                }
+            }
+        }
+
+        NrIter {
+            idx: 0,
+            data: self.data(),
+        }
+    }
+
     /// Iterate the block-types.
     pub fn iter(&self) -> impl Iterator<Item = PhysicalNr> + '_ {
         self.data().physical.iter().copied()
@@ -170,22 +264,24 @@ impl PhysicalBlock {
         block_nr >= self.start_nr() && block_nr < self.end_nr()
     }
 
-    pub fn set_physical(&mut self, block_nr: LogicalNr, physical: PhysicalNr) {
-        assert!(
-            block_nr >= self.start_nr() && block_nr < self.start_nr() + self.len_physical() as u32
-        );
-
-        let idx = (block_nr - self.start_nr()) as usize;
-        self.data_mut().physical[idx] = physical;
-        self.0.set_dirty(true);
+    pub fn set_physical(&mut self, block_nr: LogicalNr, physical: PhysicalNr) -> Result<(), Error> {
+        if self.contains(block_nr) {
+            let idx = (block_nr - self.start_nr()) as usize;
+            self.data_mut().physical[idx] = physical;
+            self.0.set_dirty(true);
+            Ok(())
+        } else {
+            Err(Error::err(FBErrorKind::InvalidBlock(block_nr)))
+        }
     }
 
-    pub fn physical(&self, block_nr: LogicalNr) -> PhysicalNr {
-        assert!(
-            block_nr >= self.start_nr() && block_nr < self.start_nr() + self.len_physical() as u32
-        );
-        let idx = (block_nr - self.start_nr()) as usize;
-        self.data().physical[idx]
+    pub fn physical(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
+        if self.contains(block_nr) {
+            let idx = (block_nr - self.start_nr()) as usize;
+            Ok(self.data().physical[idx])
+        } else {
+            Err(Error::err(FBErrorKind::InvalidBlock(block_nr)))
+        }
     }
 
     fn data_mut_g(block: &mut Block) -> &mut BlockMapPhysical {
@@ -215,9 +311,30 @@ impl PhysicalBlock {
 
 impl Debug for Physical {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut d = f.debug_list();
-        d.entries(&self.blocks);
-        d.finish()
+        f.debug_struct("Physical")
+            .field("blocks", &self.blocks)
+            .field("max_pnr", &self.max)
+            .field("free", &RefFree(self.free.as_ref()))
+            .finish()?;
+
+        struct RefFree<'a>(&'a [PhysicalNr]);
+        impl<'a> Debug for RefFree<'a> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                for r in 0..(self.0.len() + 16) / 16 {
+                    writeln!(f)?;
+                    for c in 0..16 {
+                        let i = r * 16 + c;
+
+                        if i < self.0.len() {
+                            write!(f, "{:4?} ", self.0[i])?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+
+        Ok(())
     }
 }
 

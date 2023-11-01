@@ -1,4 +1,4 @@
-use crate::{Error, LogicalNr, PhysicalNr};
+use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr};
 use std::fs::File;
 
 mod block;
@@ -43,7 +43,7 @@ impl Alloc {
             types,
             physical,
         };
-        s.assert_block_type(block_size);
+        s.assert_block_type(block_size).expect("init-ok");
 
         s
     }
@@ -66,36 +66,102 @@ impl Alloc {
             State::Low => header.low_types(),
             State::High => header.high_types(),
         };
-        let mut types = Types::load(file, &physical, block_size, types_block)?;
+        let types = Types::load(file, &physical, block_size, types_block)?;
 
-        let mut s = Self {
+        let s = Self {
             block_size,
             header,
             types,
             physical,
         };
-        s.assert_block_type(block_size);
+        s.assert_block_type(block_size)?;
 
         Ok(s)
     }
 
-    fn assert_block_type(&self, block_size: usize) {
-        assert_eq!(self.header.stored_block_size(), block_size);
+    fn assert_block_type(&self, block_size: usize) -> Result<(), Error> {
+        if self.header.stored_block_size() != block_size {
+            return Err(Error::err(FBErrorKind::InvalidBlockSize(
+                self.header.stored_block_size(),
+            )));
+        }
 
-        assert_eq!(self.block_type(self.header.block_nr()), BlockType::Header);
+        let block_nr = self.header.block_nr();
+        let Ok(block_type) = self.block_type(block_nr) else {
+            return Err(Error::err(FBErrorKind::NoBlockType(block_nr)));
+        };
+        if block_type != BlockType::Header {
+            return Err(Error::err(FBErrorKind::InvalidBlockType(
+                block_nr, block_type,
+            )));
+        }
+
         for v in &self.types {
-            assert_eq!(self.block_type(v.block_nr()), BlockType::Types);
+            let block_nr = v.block_nr();
+            let Ok(block_type) = self.block_type(block_nr) else {
+                return Err(Error::err(FBErrorKind::NoBlockType(block_nr)));
+            };
+            if block_type != BlockType::Types {
+                return Err(Error::err(FBErrorKind::InvalidBlockType(
+                    block_nr, block_type,
+                )));
+            }
         }
         for v in &self.physical {
-            assert_eq!(self.block_type(v.block_nr()), BlockType::Physical);
+            let block_nr = v.block_nr();
+            let Ok(block_type) = self.block_type(block_nr) else {
+                return Err(Error::err(FBErrorKind::NoBlockType(block_nr)));
+            };
+            if block_type != BlockType::Physical {
+                return Err(Error::err(FBErrorKind::InvalidBlockType(
+                    block_nr, block_type,
+                )));
+            }
         }
+        Ok(())
     }
 
-    fn block_type(&self, logical: LogicalNr) -> BlockType {
+    fn append_blockmap(&mut self) {
+        // new types-block
+        let types_nr = self.types.pop_free().expect("free");
+        self.types
+            .set_block_type(types_nr, BlockType::Types)
+            .expect("valid-block");
+        self.types.append_blockmap(types_nr);
+
+        // new physical-block
+        let physical_nr = self.types.pop_free().expect("free");
+        self.types
+            .set_block_type(physical_nr, BlockType::Physical)
+            .expect("valid-block");
+        self.physical.append_blockmap(physical_nr);
+    }
+
+    pub fn alloc_block(&mut self, block_type: BlockType, align: usize) -> Block {
+        if self.types.free_len() == 2 {
+            self.append_blockmap();
+        }
+
+        let alloc_nr = self.types.pop_free().expect("free");
+        self.types
+            .set_block_type(alloc_nr, block_type)
+            .expect("valid-block");
+        let alloc = Block::new(alloc_nr, self.block_size, align, block_type);
+
+        alloc
+    }
+
+    pub fn free_block(&mut self, block_nr: LogicalNr) -> Result<(), Error> {
+        self.types.set_block_type(block_nr, BlockType::Free)?;
+        self.physical.free_block(block_nr)?;
+        Ok(())
+    }
+
+    fn block_type(&self, logical: LogicalNr) -> Result<BlockType, Error> {
         self.types.block_type(logical)
     }
 
-    fn physical_block(&self, logical: LogicalNr) -> PhysicalNr {
+    fn physical_block(&self, logical: LogicalNr) -> Result<PhysicalNr, Error> {
         self.physical.physical_block(logical)
     }
 }

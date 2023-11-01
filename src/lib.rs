@@ -1,14 +1,14 @@
 use std::backtrace::Backtrace;
 use std::fmt::{Debug, Display, Formatter};
 use std::io;
-use std::ops::{Add, Sub};
+use std::ops::{Add, AddAssign, Sub};
 
 mod blockmap;
 
 pub use crate::blockmap::{Alloc, Block, BlockType, HeaderBlock, PhysicalBlock, State, TypesBlock};
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub struct PhysicalNr(u32);
 
 impl PhysicalNr {
@@ -27,11 +27,23 @@ impl Display for PhysicalNr {
     }
 }
 
+impl Debug for PhysicalNr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "*{}", self.0)
+    }
+}
+
 impl Add<u32> for PhysicalNr {
     type Output = PhysicalNr;
 
     fn add(self, rhs: u32) -> Self::Output {
         PhysicalNr(self.as_u32() + rhs)
+    }
+}
+
+impl AddAssign<u32> for PhysicalNr {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs;
     }
 }
 
@@ -44,7 +56,7 @@ impl Sub for PhysicalNr {
 }
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, PartialEq, PartialOrd)]
 pub struct LogicalNr(u32);
 
 impl LogicalNr {
@@ -63,11 +75,23 @@ impl Display for LogicalNr {
     }
 }
 
+impl Debug for LogicalNr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]", self.0)
+    }
+}
+
 impl Add<u32> for LogicalNr {
     type Output = LogicalNr;
 
     fn add(self, rhs: u32) -> Self::Output {
         LogicalNr(self.as_u32() + rhs)
+    }
+}
+
+impl AddAssign<u32> for LogicalNr {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs;
     }
 }
 
@@ -94,6 +118,15 @@ pub enum FBErrorKind {
     SubStoreRaw(PhysicalNr),
     /// Sync failed. IO error.
     Sync,
+
+    ///
+    InvalidBlock(LogicalNr),
+    ///
+    InvalidBlockSize(usize),
+    ///
+    NoBlockType(LogicalNr),
+    ///
+    InvalidBlockType(LogicalNr, BlockType),
 }
 
 pub struct Error {
