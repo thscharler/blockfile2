@@ -10,6 +10,7 @@ mod types;
 
 use crate::blockmap::physical::Physical;
 use crate::blockmap::types::Types;
+
 pub use block::Block;
 pub use blocktype::BlockType;
 pub use header::{HeaderBlock, State};
@@ -137,6 +138,32 @@ impl Alloc {
         self.physical.append_blockmap(physical_nr);
     }
 
+    /// Blocksize.
+    pub fn block_size(&self) -> usize {
+        self.block_size
+    }
+
+    ///
+    pub fn header(&self) -> &HeaderBlock {
+        &self.header
+    }
+
+    /// Iterate over block-types.
+    pub fn iter_types(&self) -> impl Iterator<Item = &'_ TypesBlock> {
+        (&self.types).into_iter()
+    }
+
+    /// Iterate over the logical->physical map.
+    pub fn iter_physical(&self) -> impl Iterator<Item = &'_ PhysicalBlock> {
+        (&self.physical).into_iter()
+    }
+
+    /// Metadata
+    pub fn iter_metadata(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> + '_ {
+        self.types.iter_nr()
+    }
+
+    /// Allocate a block.
     pub fn alloc_block(&mut self, block_type: BlockType, align: usize) -> Block {
         if self.types.free_len() == 2 {
             self.append_blockmap();
@@ -146,11 +173,10 @@ impl Alloc {
         self.types
             .set_block_type(alloc_nr, block_type)
             .expect("valid-block");
-        let alloc = Block::new(alloc_nr, self.block_size, align, block_type);
-
-        alloc
+        Block::new(alloc_nr, self.block_size, align, block_type)
     }
 
+    /// Free a block.
     pub fn free_block(&mut self, block_nr: LogicalNr) -> Result<(), Error> {
         self.types.set_block_type(block_nr, BlockType::Free)?;
         self.physical.free_block(block_nr)?;

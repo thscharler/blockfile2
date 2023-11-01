@@ -16,7 +16,7 @@ pub enum State {
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct BlockMapHeader {
+struct BlockMapHeader {
     state: State,              //0
     block_size: u32,           //4
     low_types: PhysicalNr,     //8
@@ -63,7 +63,7 @@ impl HeaderBlock {
         &self.0
     }
 
-    pub fn block_mut(&mut self) -> &mut Block {
+    pub(super) fn block_mut(&mut self) -> &mut Block {
         &mut self.0
     }
 
@@ -77,7 +77,7 @@ impl HeaderBlock {
     const OFFSET_HIGH_TYPES: usize = 16;
     const OFFSET_HIGH_PHYSICAL: usize = 20;
 
-    pub fn store_state(
+    pub(super) fn store_state(
         &mut self,
         file: &mut File,
         physical_block: PhysicalNr,
@@ -99,7 +99,7 @@ impl HeaderBlock {
         self.data().state
     }
 
-    pub fn store_low_types(
+    pub(super) fn store_low_types(
         &mut self,
         file: &mut File,
         physical_block: PhysicalNr,
@@ -121,7 +121,7 @@ impl HeaderBlock {
         self.data().low_types
     }
 
-    pub fn store_low_physical(
+    pub(super) fn store_low_physical(
         &mut self,
         file: &mut File,
         physical_block: PhysicalNr,
@@ -143,7 +143,7 @@ impl HeaderBlock {
         self.data().low_physical
     }
 
-    pub fn store_high_types(
+    pub(super) fn store_high_types(
         &mut self,
         file: &mut File,
         physical_block: PhysicalNr,
@@ -165,7 +165,7 @@ impl HeaderBlock {
         self.data().high_types
     }
 
-    pub fn store_high_physical(
+    pub(super) fn store_high_physical(
         &mut self,
         file: &mut File,
         physical_block: PhysicalNr,

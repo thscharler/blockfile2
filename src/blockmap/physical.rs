@@ -10,7 +10,7 @@ use std::fs::File;
 use std::mem::{align_of, size_of};
 use std::ptr;
 
-pub struct Physical {
+pub(super) struct Physical {
     block_size: usize,
     blocks: Vec<PhysicalBlock>,
     max: PhysicalNr,
@@ -21,7 +21,7 @@ pub struct PhysicalBlock(Block);
 
 #[repr(C)]
 #[derive(Debug)]
-pub struct BlockMapPhysical {
+struct BlockMapPhysical {
     start_nr: LogicalNr,
     next_nr: LogicalNr,
     physical: [PhysicalNr],
@@ -45,7 +45,7 @@ impl Physical {
 
     pub fn load(file: &mut File, block_size: usize, block_pnr: PhysicalNr) -> Result<Self, Error> {
         let mut physical_block_0 = PhysicalBlock::new(_INIT_PHYSICAL_NR, block_size);
-        block_io::load_raw(file, block_pnr, physical_block_0.block_mut())?;
+        block_io::load_raw(file, block_pnr, &mut physical_block_0.0)?;
 
         let mut next = physical_block_0.next_nr();
 
@@ -59,7 +59,7 @@ impl Physical {
         loop {
             let next_pnr = new_self.physical_block(next)?;
             let mut physical_block = PhysicalBlock::new(next, block_size);
-            block_io::load_raw(file, next_pnr, physical_block.block_mut())?;
+            block_io::load_raw(file, next_pnr, &mut physical_block.0)?;
 
             next = physical_block.next_nr();
 
@@ -81,9 +81,7 @@ impl Physical {
         for physical_block in &self.blocks {
             // build bitset of used blocks.
             for (nr, pnr) in physical_block.iter_nr() {
-                if nr.as_u32() == 0 {
-                    used_pnr.insert(pnr.as_usize());
-                } else if pnr.as_u32() != 0 {
+                if nr.as_u32() == 0 || pnr.as_u32() != 0 {
                     used_pnr.insert(pnr.as_usize());
                 }
             }
@@ -100,7 +98,7 @@ impl Physical {
     }
 
     /// Give back a free physical block.
-    pub fn find_free(&mut self) -> PhysicalNr {
+    pub fn pop_free(&mut self) -> PhysicalNr {
         if let Some(nr) = self.free.pop() {
             nr
         } else {
@@ -141,7 +139,7 @@ impl Physical {
         let Some(map) = self.map(block_nr) else {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
         };
-        Ok(map.physical(block_nr)?)
+        map.physical(block_nr)
     }
 
     fn map(&self, block_nr: LogicalNr) -> Option<&PhysicalBlock> {
@@ -165,7 +163,7 @@ impl<'a> IntoIterator for &'a Physical {
 }
 
 impl PhysicalBlock {
-    pub fn init(block_size: usize) -> Self {
+    pub(super) fn init(block_size: usize) -> Self {
         let mut block_0 = Block::new(_INIT_PHYSICAL_NR, block_size, 4, BlockType::Physical);
         let physical_0 = Self::data_mut_g(&mut block_0);
         physical_0.physical[_INIT_HEADER_NR.as_usize()] = _INIT_HEADER_PNR;
@@ -175,7 +173,7 @@ impl PhysicalBlock {
         Self(block_0)
     }
 
-    pub fn new(block_nr: LogicalNr, block_size: usize) -> Self {
+    pub(super) fn new(block_nr: LogicalNr, block_size: usize) -> Self {
         Self(Block::new(
             block_nr,
             block_size,
@@ -184,16 +182,36 @@ impl PhysicalBlock {
         ))
     }
 
-    pub fn block(&self) -> &Block {
-        &self.0
+    pub fn block_align(&self) -> usize {
+        self.0.block_align()
     }
 
-    pub fn block_mut(&mut self) -> &mut Block {
-        &mut self.0
+    pub fn block_size(&self) -> usize {
+        self.0.block_size()
     }
 
     pub fn block_nr(&self) -> LogicalNr {
         self.0.block_nr()
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.0.is_dirty()
+    }
+
+    pub fn set_dirty(&mut self, dirty: bool) {
+        self.0.set_dirty(dirty);
+    }
+
+    pub fn is_discard(&self) -> bool {
+        self.0.is_discard()
+    }
+
+    pub fn set_discard(&mut self, discard: bool) {
+        self.0.set_discard(discard)
+    }
+
+    pub fn generation(&self) -> u32 {
+        self.0.generation()
     }
 
     pub const fn len_physical_g(block_size: usize) -> usize {
@@ -208,7 +226,7 @@ impl PhysicalBlock {
         self.data().start_nr
     }
 
-    pub fn set_start_nr(&mut self, start_nr: LogicalNr) {
+    pub(super) fn set_start_nr(&mut self, start_nr: LogicalNr) {
         self.data_mut().start_nr = start_nr;
         self.0.set_dirty(true);
     }
@@ -221,7 +239,7 @@ impl PhysicalBlock {
         self.data().next_nr
     }
 
-    pub fn set_next_nr(&mut self, next_nr: LogicalNr) {
+    pub(super) fn set_next_nr(&mut self, next_nr: LogicalNr) {
         self.data_mut().next_nr = next_nr;
         self.0.set_dirty(true);
     }
@@ -264,7 +282,11 @@ impl PhysicalBlock {
         block_nr >= self.start_nr() && block_nr < self.end_nr()
     }
 
-    pub fn set_physical(&mut self, block_nr: LogicalNr, physical: PhysicalNr) -> Result<(), Error> {
+    pub(super) fn set_physical(
+        &mut self,
+        block_nr: LogicalNr,
+        physical: PhysicalNr,
+    ) -> Result<(), Error> {
         if self.contains(block_nr) {
             let idx = (block_nr - self.start_nr()) as usize;
             self.data_mut().physical[idx] = physical;

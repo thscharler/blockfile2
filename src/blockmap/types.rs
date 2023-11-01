@@ -7,7 +7,7 @@ use std::fs::File;
 use std::mem::size_of;
 use std::ptr;
 
-pub struct Types {
+pub(super) struct Types {
     block_size: usize,
     blocks: Vec<TypesBlock>,
     free: Vec<LogicalNr>,
@@ -16,7 +16,7 @@ pub struct Types {
 pub struct TypesBlock(Block);
 
 #[repr(C)]
-pub struct BlockMapType {
+struct BlockMapType {
     start_nr: LogicalNr,
     next_nr: LogicalNr,
     block_type: [BlockType],
@@ -44,7 +44,7 @@ impl Types {
         physical_block: PhysicalNr,
     ) -> Result<Self, Error> {
         let mut types_0 = TypesBlock::new(_INIT_TYPES_NR, block_size);
-        block_io::load_raw(file, physical_block, types_0.block_mut())?;
+        block_io::load_raw(file, physical_block, &mut types_0.0)?;
 
         let mut next = types_0.next_nr();
 
@@ -57,7 +57,7 @@ impl Types {
         loop {
             let next_p = physical.physical_block(next)?;
             let mut types = TypesBlock::new(next, block_size);
-            block_io::load_raw(file, next_p, types.block_mut())?;
+            block_io::load_raw(file, next_p, &mut types.0)?;
 
             next = types.next_nr();
 
@@ -127,7 +127,47 @@ impl Types {
         let Some(map) = self.map(block_nr) else {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
         };
-        Ok(map.block_type(block_nr)?)
+        map.block_type(block_nr)
+    }
+
+    pub fn iter_nr(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> + '_ {
+        struct ItNr<'a> {
+            block_idx: usize,
+            type_idx: usize,
+            block: &'a [TypesBlock],
+        }
+
+        impl<'a> Iterator for ItNr<'a> {
+            type Item = (LogicalNr, BlockType);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.block_idx + 1 >= self.block.len() {
+                    return None;
+                }
+
+                let block = &self.block[self.block_idx];
+                let data = block.data();
+
+                let block_nr = data.start_nr + self.type_idx as u32;
+                let block_ty = block.data().block_type[self.type_idx];
+
+                // next
+                if self.type_idx + 1 < data.block_type.len() {
+                    self.type_idx += 1;
+                } else {
+                    self.block_idx += 1;
+                    self.type_idx = 0;
+                }
+
+                Some((block_nr, block_ty))
+            }
+        }
+
+        ItNr {
+            block_idx: 0,
+            type_idx: 0,
+            block: self.blocks.as_ref(),
+        }
     }
 
     fn map(&self, block_nr: LogicalNr) -> Option<&TypesBlock> {
@@ -151,7 +191,7 @@ impl<'a> IntoIterator for &'a Types {
 }
 
 impl TypesBlock {
-    pub fn init(block_size: usize) -> Self {
+    pub(super) fn init(block_size: usize) -> Self {
         let mut block_0 = Block::new(_INIT_TYPES_NR, block_size, 4, BlockType::Types);
         let types_0 = Self::data_mut_g(&mut block_0);
         types_0.block_type[_INIT_HEADER_NR.as_usize()] = BlockType::Header;
@@ -161,20 +201,40 @@ impl TypesBlock {
         Self(block_0)
     }
 
-    pub fn new(block_nr: LogicalNr, block_size: usize) -> Self {
+    pub(super) fn new(block_nr: LogicalNr, block_size: usize) -> Self {
         Self(Block::new(block_nr, block_size, 4, BlockType::Types))
     }
 
-    pub fn block(&self) -> &Block {
-        &self.0
+    pub fn block_align(&self) -> usize {
+        self.0.block_align()
     }
 
-    pub fn block_mut(&mut self) -> &mut Block {
-        &mut self.0
+    pub fn block_size(&self) -> usize {
+        self.0.block_size()
     }
 
     pub fn block_nr(&self) -> LogicalNr {
         self.0.block_nr()
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.0.is_dirty()
+    }
+
+    pub fn set_dirty(&mut self, dirty: bool) {
+        self.0.set_dirty(dirty);
+    }
+
+    pub fn is_discard(&self) -> bool {
+        self.0.is_discard()
+    }
+
+    pub fn set_discard(&mut self, discard: bool) {
+        self.0.set_discard(discard)
+    }
+
+    pub fn generation(&self) -> u32 {
+        self.0.generation()
     }
 
     pub const fn len_types_g(block_size: usize) -> usize {
@@ -189,7 +249,7 @@ impl TypesBlock {
         self.data().start_nr
     }
 
-    pub fn set_start_nr(&mut self, start_nr: LogicalNr) {
+    pub(super) fn set_start_nr(&mut self, start_nr: LogicalNr) {
         self.data_mut().start_nr = start_nr;
         self.0.set_dirty(true);
     }
@@ -202,7 +262,7 @@ impl TypesBlock {
         self.data().next_nr
     }
 
-    pub fn set_next_nr(&mut self, next_nr: LogicalNr) {
+    pub(super) fn set_next_nr(&mut self, next_nr: LogicalNr) {
         self.data_mut().next_nr = next_nr;
         self.0.set_dirty(true);
     }
@@ -245,7 +305,7 @@ impl TypesBlock {
         block_nr >= self.start_nr() && block_nr < self.end_nr()
     }
 
-    pub fn set_block_type(
+    pub(super) fn set_block_type(
         &mut self,
         block_nr: LogicalNr,
         block_type: BlockType,

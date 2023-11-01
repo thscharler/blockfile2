@@ -9,7 +9,7 @@ pub use crate::blockmap::{Alloc, Block, BlockType, HeaderBlock, PhysicalBlock, S
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
-pub struct PhysicalNr(u32);
+pub struct PhysicalNr(pub u32);
 
 impl PhysicalNr {
     pub fn as_u32(&self) -> u32 {
@@ -57,7 +57,7 @@ impl Sub for PhysicalNr {
 
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
-pub struct LogicalNr(u32);
+pub struct LogicalNr(pub u32);
 
 impl LogicalNr {
     pub fn as_u32(&self) -> u32 {
