@@ -1,10 +1,8 @@
 use crate::blockmap::block::Block;
-use crate::blockmap::{
-    block_io, BlockType, _INIT_HEADER_NR, _INIT_HEADER_PNR, _INIT_PHYSICAL_NR, _INIT_PHYSICAL_PNR,
-    _INIT_TYPES_NR, _INIT_TYPES_PNR,
-};
+use crate::blockmap::{block_io, BlockType, _INIT_PHYSICAL_NR};
 use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr};
 use bit_set::BitSet;
+use std::cmp::max;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::mem::{align_of, size_of};
@@ -92,7 +90,7 @@ impl Physical {
             if !used_pnr.contains(i) {
                 self.free.push(PhysicalNr(i as u32));
             } else {
-                self.max = PhysicalNr(i as u32);
+                self.max = max(self.max, PhysicalNr(i as u32));
             }
         }
     }
@@ -134,6 +132,11 @@ impl Physical {
         block.end_nr()
     }
 
+    /// Maximum physical block.
+    pub fn max_physical(&self) -> PhysicalNr {
+        self.max
+    }
+
     /// Find the physical block.
     pub fn physical_block(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
         let Some(map) = self.map(block_nr) else {
@@ -164,12 +167,7 @@ impl<'a> IntoIterator for &'a Physical {
 
 impl PhysicalBlock {
     pub(super) fn init(block_size: usize) -> Self {
-        let mut block_0 = Block::new(_INIT_PHYSICAL_NR, block_size, 4, BlockType::Physical);
-        let physical_0 = Self::data_mut_g(&mut block_0);
-        physical_0.physical[_INIT_HEADER_NR.as_usize()] = _INIT_HEADER_PNR;
-        physical_0.physical[_INIT_TYPES_NR.as_usize()] = _INIT_TYPES_PNR;
-        physical_0.physical[_INIT_PHYSICAL_NR.as_usize()] = _INIT_PHYSICAL_PNR;
-
+        let block_0 = Block::new(_INIT_PHYSICAL_NR, block_size, 4, BlockType::Physical);
         Self(block_0)
     }
 

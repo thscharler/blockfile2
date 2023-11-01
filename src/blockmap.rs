@@ -20,9 +20,6 @@ pub use types::TypesBlock;
 pub const _INIT_HEADER_NR: LogicalNr = LogicalNr(0);
 pub const _INIT_TYPES_NR: LogicalNr = LogicalNr(1);
 pub const _INIT_PHYSICAL_NR: LogicalNr = LogicalNr(2);
-pub const _INIT_HEADER_PNR: PhysicalNr = PhysicalNr(0);
-pub const _INIT_TYPES_PNR: PhysicalNr = PhysicalNr(1);
-pub const _INIT_PHYSICAL_PNR: PhysicalNr = PhysicalNr(2);
 
 #[derive(Debug)]
 pub struct Alloc {
@@ -49,13 +46,20 @@ impl Alloc {
         s
     }
 
-    pub fn store(file: &mut File) -> Result<(), Error> {
-        todo!();
+    pub fn store(&mut self, file: &mut File) -> Result<(), Error> {
+        // self.physical.
+        //
+        //
+        //
+        // for block in &self.physical {
+        //
+        // }
+        todo!()
     }
 
     pub fn load(file: &mut File, block_size: usize) -> Result<Self, Error> {
         let mut header = HeaderBlock::new(_INIT_HEADER_NR, block_size);
-        block_io::load_raw(file, _INIT_HEADER_PNR, header.block_mut())?;
+        block_io::load_raw(file, PhysicalNr(0), header.block_mut())?;
 
         let physical_block = match header.state() {
             State::Low => header.low_physical(),
@@ -143,7 +147,7 @@ impl Alloc {
         self.block_size
     }
 
-    ///
+    /// Header data.
     pub fn header(&self) -> &HeaderBlock {
         &self.header
     }

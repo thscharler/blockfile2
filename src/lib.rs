@@ -8,7 +8,7 @@ mod blockmap;
 pub use crate::blockmap::{Alloc, Block, BlockType, HeaderBlock, PhysicalBlock, State, TypesBlock};
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PhysicalNr(pub u32);
 
 impl PhysicalNr {
@@ -56,7 +56,7 @@ impl Sub for PhysicalNr {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LogicalNr(pub u32);
 
 impl LogicalNr {
