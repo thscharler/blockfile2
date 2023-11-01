@@ -1,8 +1,9 @@
-use crate::blockmap::{BlockType, LogicalNr, PhysicalNr};
+use crate::blockmap::{BlockType, LogicalNr};
 use std::alloc::Layout;
 use std::mem::{align_of, align_of_val, size_of};
 use std::{alloc, mem};
 
+#[derive(Debug)]
 pub struct Block {
     block_nr: LogicalNr,
     block_type: BlockType,

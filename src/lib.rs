@@ -3,7 +3,8 @@ use std::fmt::{Debug, Display, Formatter};
 use std::io;
 
 mod blockmap;
-mod core;
+
+pub use crate::blockmap::{Alloc, Block, BlockType, Header, Physical, State, Types};
 
 #[derive(Debug)]
 #[non_exhaustive]

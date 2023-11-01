@@ -19,7 +19,7 @@ pub(crate) fn store_raw(
     physical_block: PhysicalNr,
     block: &Block,
 ) -> Result<(), Error> {
-    seek_block(file, physical_block, block.bblock_size())?;
+    seek_block(file, physical_block, block.block_size())?;
     file.write_all(block.data.as_ref())
         .xerr(FBErrorKind::StoreRaw(block.block_nr()))?;
     Ok(())
@@ -46,6 +46,40 @@ fn seek_block(file: &mut File, physical_block: PhysicalNr, block_size: usize) ->
     let file_pos = file
         .seek(SeekFrom::Start(seek_pos))
         .xerr(FBErrorKind::SeekBlock(physical_block))?;
+    debug_assert_eq!(file_pos, seek_pos);
+    Ok(())
+}
+
+// Write a block to storage.
+//
+// Panic
+// panics if the block was not allocated or if it isn't the next-to-last block.
+pub(crate) fn sub_store_raw(
+    file: &mut File,
+    physical_block: PhysicalNr,
+    block_size: usize,
+    offset: usize,
+    block: &[u8],
+) -> Result<(), Error> {
+    debug_assert!((offset + block.len()) <= block_size);
+    sub_seek_block(file, physical_block, block_size, offset)?;
+    file.write_all(block)
+        .xerr(FBErrorKind::SubStoreRaw(physical_block))?;
+    Ok(())
+}
+
+// Seek to the block_nr
+fn sub_seek_block(
+    file: &mut File,
+    physical_block: PhysicalNr,
+    block_size: usize,
+    offset: usize,
+) -> Result<(), Error> {
+    debug_assert!(offset <= block_size);
+    let seek_pos = (physical_block as usize * block_size + offset) as u64;
+    let file_pos = file
+        .seek(SeekFrom::Start(seek_pos))
+        .xerr(FBErrorKind::SubSeekBlock(physical_block))?;
     debug_assert_eq!(file_pos, seek_pos);
     Ok(())
 }
