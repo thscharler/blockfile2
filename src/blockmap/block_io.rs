@@ -1,7 +1,6 @@
 use crate::blockmap::block::Block;
-use crate::blockmap::PhysicalNr;
-use crate::Error;
 use crate::{ConvertIOError, FBErrorKind};
+use crate::{Error, PhysicalNr};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -21,7 +20,7 @@ pub(crate) fn store_raw(
 ) -> Result<(), Error> {
     seek_block(file, physical_block, block.block_size())?;
     file.write_all(block.data.as_ref())
-        .xerr(FBErrorKind::StoreRaw(block.block_nr()))?;
+        .xerr(FBErrorKind::StoreRaw(block.block_nr(), physical_block))?;
     Ok(())
 }
 
@@ -36,13 +35,13 @@ pub(crate) fn load_raw(
 ) -> Result<(), Error> {
     seek_block(file, physical_block, block.block_size())?;
     file.read_exact(block.data.as_mut())
-        .xerr(FBErrorKind::LoadRaw(block.block_nr()))?;
+        .xerr(FBErrorKind::LoadRaw(block.block_nr(), physical_block))?;
     Ok(())
 }
 
 // Seek to the block_nr
 fn seek_block(file: &mut File, physical_block: PhysicalNr, block_size: usize) -> Result<(), Error> {
-    let seek_pos = (physical_block as usize * block_size) as u64;
+    let seek_pos = (physical_block.as_usize() * block_size) as u64;
     let file_pos = file
         .seek(SeekFrom::Start(seek_pos))
         .xerr(FBErrorKind::SeekBlock(physical_block))?;
@@ -76,7 +75,7 @@ fn sub_seek_block(
     offset: usize,
 ) -> Result<(), Error> {
     debug_assert!(offset <= block_size);
-    let seek_pos = (physical_block as usize * block_size + offset) as u64;
+    let seek_pos = (physical_block.as_usize() * block_size + offset) as u64;
     let file_pos = file
         .seek(SeekFrom::Start(seek_pos))
         .xerr(FBErrorKind::SubSeekBlock(physical_block))?;

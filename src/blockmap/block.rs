@@ -1,4 +1,5 @@
-use crate::blockmap::{BlockType, LogicalNr};
+use crate::blockmap::BlockType;
+use crate::LogicalNr;
 use std::alloc::Layout;
 use std::mem::{align_of, align_of_val, size_of};
 use std::{alloc, mem};

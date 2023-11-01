@@ -1,14 +1,11 @@
 use crate::blockmap::block::Block;
-use crate::blockmap::{
-    block_io, BlockType, LogicalNr, PhysicalNr, _INIT_HEADER_NR, _INIT_PHYSICAL_PHYSICAL,
-    _INIT_TYPES_PHYSICAL,
-};
-use crate::Error;
+use crate::blockmap::{block_io, BlockType, _INIT_HEADER_NR, _INIT_PHYSICAL_PNR, _INIT_TYPES_PNR};
+use crate::{Error, LogicalNr, PhysicalNr};
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::mem::{align_of, size_of};
 
-pub struct Header(Block);
+pub struct HeaderBlock(Block);
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -28,7 +25,7 @@ pub struct BlockMapHeader {
     high_physical: PhysicalNr, //20
 }
 
-impl Header {
+impl HeaderBlock {
     pub fn init(block_size: usize) -> Self {
         let mut block_0 = Block::new(
             _INIT_HEADER_NR,
@@ -45,15 +42,15 @@ impl Header {
 
         header_0.state = State::Low;
         header_0.block_size = block_size as u32;
-        header_0.low_types = _INIT_TYPES_PHYSICAL;
-        header_0.low_physical = _INIT_PHYSICAL_PHYSICAL;
-        header_0.high_types = 0; // ??
-        header_0.high_physical = 0; // ??
+        header_0.low_types = _INIT_TYPES_PNR;
+        header_0.low_physical = _INIT_PHYSICAL_PNR;
+        header_0.high_types = PhysicalNr(0); // ??
+        header_0.high_physical = PhysicalNr(0); // ??
 
         Self(block_0)
     }
 
-    pub fn new(block_nr: u32, block_size: usize) -> Self {
+    pub fn new(block_nr: LogicalNr, block_size: usize) -> Self {
         Self(Block::new(
             block_nr,
             block_size,
@@ -108,7 +105,7 @@ impl Header {
         physical_block: PhysicalNr,
         low_types: PhysicalNr,
     ) -> Result<(), Error> {
-        let low_types_bytes = low_types.to_ne_bytes();
+        let low_types_bytes = low_types.as_u32().to_ne_bytes();
         block_io::sub_store_raw(
             file,
             physical_block,
@@ -130,7 +127,7 @@ impl Header {
         physical_block: PhysicalNr,
         low_physical: PhysicalNr,
     ) -> Result<(), Error> {
-        let low_physical_bytes = low_physical.to_ne_bytes();
+        let low_physical_bytes = low_physical.as_u32().to_ne_bytes();
         block_io::sub_store_raw(
             file,
             physical_block,
@@ -152,7 +149,7 @@ impl Header {
         physical_block: PhysicalNr,
         high_types: PhysicalNr,
     ) -> Result<(), Error> {
-        let high_types_bytes = high_types.to_ne_bytes();
+        let high_types_bytes = high_types.as_u32().to_ne_bytes();
         block_io::sub_store_raw(
             file,
             physical_block,
@@ -174,7 +171,7 @@ impl Header {
         physical_block: PhysicalNr,
         high_physical: PhysicalNr,
     ) -> Result<(), Error> {
-        let high_physical_bytes = high_physical.to_ne_bytes();
+        let high_physical_bytes = high_physical.as_u32().to_ne_bytes();
         block_io::sub_store_raw(
             file,
             physical_block,
@@ -215,7 +212,7 @@ impl Header {
     }
 }
 
-impl Debug for Header {
+impl Debug for HeaderBlock {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self.data())
     }
