@@ -106,10 +106,7 @@ where
     pub fn iter_metadata(&self) -> impl Iterator<Item = (LogicalNr, U)> {
         self.alloc
             .iter_metadata()
-            .filter_map(|(nr, ty)| match U::user_type(ty) {
-                None => None,
-                Some(ty) => Some((nr, ty)),
-            })
+            .filter_map(|(nr, ty)| U::user_type(ty).map(|ty| (nr, ty)))
     }
 
     /// Iterate all blocks in memory.
@@ -201,10 +198,7 @@ where
         s.field("block_size", &self.alloc.block_size());
         s.field("generation", &self.alloc.generation());
         s.field("header", &self.alloc.header());
-        s.field(
-            "types",
-            &UserTypes::<U>(self.alloc.types(), PhantomData::default()),
-        );
+        s.field("types", &UserTypes::<U>(self.alloc.types(), PhantomData));
         s.field("physical", &self.alloc.physical());
         s.finish()?;
 

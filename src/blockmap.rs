@@ -125,7 +125,7 @@ impl Alloc {
                 let new_pnr = self.physical.pop_free();
                 self.physical.set_physical_nr(*block_nr, new_pnr)?;
 
-                block_io::store_raw(file, new_pnr, &block)?;
+                block_io::store_raw(file, new_pnr, block)?;
                 block.set_dirty(false);
                 block.set_generation(self.generation);
             }

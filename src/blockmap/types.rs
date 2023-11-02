@@ -424,21 +424,13 @@ impl TypesBlock {
 
 impl Debug for Types {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:?}",
-            UserTypes::<BlockType>(self, PhantomData::default())
-        )
+        write!(f, "{:?}", UserTypes::<BlockType>(self, PhantomData))
     }
 }
 
 impl Debug for TypesBlock {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{:?}",
-            UserTypesBlock::<BlockType>(self, PhantomData::default())
-        )
+        write!(f, "{:?}", UserTypesBlock::<BlockType>(self, PhantomData))
     }
 }
 
@@ -451,10 +443,7 @@ where
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("Types");
-        s.field(
-            "blocks",
-            &RefTypes::<U>(&self.0.blocks, PhantomData::default()),
-        );
+        s.field("blocks", &RefTypes::<U>(&self.0.blocks, PhantomData));
         s.field("free", &RefFree(self.0.free.as_ref()));
         s.finish()?;
 
@@ -465,11 +454,7 @@ where
         {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
                 for block in self.0 {
-                    writeln!(
-                        f,
-                        "{:?}",
-                        UserTypesBlock::<U>(block, PhantomData::default())
-                    )?;
+                    writeln!(f, "{:?}", UserTypesBlock::<U>(block, PhantomData))?;
                 }
                 Ok(())
             }
@@ -521,7 +506,7 @@ where
             &RefTypes::<U>(
                 &self.0.data().block_type,
                 self.0.start_nr().as_usize(),
-                PhantomData::default(),
+                PhantomData,
             ),
         );
         s.finish()?;

@@ -88,10 +88,10 @@ fn seek_block(
     let seek_pos = (physical_block.as_usize() * block_size) as u64;
     let result = file.seek(SeekFrom::Start(seek_pos));
     result
-        .or_else(|v| Err(map_error(v, FBErrorKind::SeekBlock(physical_block))))
-        .and_then(|v| {
+        .map_err(|v| map_error(v, FBErrorKind::SeekBlock(physical_block)))
+        .map(|v| {
             debug_assert_eq!(v, seek_pos);
-            Ok(v)
+            v
         })
 }
 
@@ -123,9 +123,9 @@ fn sub_seek_block(
     let seek_pos = (physical_block.as_usize() * block_size + offset) as u64;
     let result = file.seek(SeekFrom::Start(seek_pos));
     result
-        .or_else(|e| Err(map_error(e, FBErrorKind::SubSeekBlock(physical_block))))
-        .and_then(|v| {
+        .map_err(|e| map_error(e, FBErrorKind::SubSeekBlock(physical_block)))
+        .map(|v| {
             debug_assert_eq!(v, seek_pos);
-            Ok(v)
+            v
         })
 }
