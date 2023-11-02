@@ -36,8 +36,8 @@ impl UserBlockType for BlockType {
         self
     }
 
-    fn user_type(block_type: BlockType) -> Self {
-        block_type
+    fn user_type(block_type: BlockType) -> Option<Self> {
+        Some(block_type)
     }
 
     fn align(self) -> usize {

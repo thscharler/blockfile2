@@ -104,7 +104,12 @@ where
 
     /// Metadata
     pub fn iter_metadata(&self) -> impl Iterator<Item = (LogicalNr, U)> {
-        self.alloc.iter_metadata().map(|v| (v.0, U::user_type(v.1)))
+        self.alloc
+            .iter_metadata()
+            .filter_map(|(nr, ty)| match U::user_type(ty) {
+                None => None,
+                Some(ty) => Some((nr, ty)),
+            })
     }
 
     /// Iterate all blocks in memory.
@@ -119,7 +124,13 @@ where
 
     /// Block type for a block-nr.
     pub fn block_type(&self, block_nr: LogicalNr) -> Result<U, Error> {
-        self.alloc.block_type(block_nr).map(|v| U::user_type(v))
+        match self.alloc.block_type(block_nr) {
+            Ok(v) => match U::user_type(v) {
+                None => Err(Error::err(FBErrorKind::NoUserBlockType)),
+                Some(v) => Ok(v),
+            },
+            Err(e) => Err(e),
+        }
     }
 
     /// Discard a block. Remove from memory cache but do nothing otherwise.
@@ -143,17 +154,28 @@ where
     }
 
     /// Free user-block cache.
-    pub fn retain<F>(&mut self, f: F)
+    pub fn retain<F>(&mut self, mut f: F)
     where
         F: FnMut(&LogicalNr, &mut Block) -> bool,
     {
-        self.alloc.retain_blocks(f)
+        // don't allow the outside world to fuck up our data.
+        self.alloc.retain_blocks(move |k, v| match v.block_type() {
+            BlockType::NotAllocated => false,
+            BlockType::Free => false,
+            BlockType::Header => true,
+            BlockType::Types => true,
+            BlockType::Physical => true,
+            _ => f(k, v),
+        })
     }
 
     /// Get a data block.
     pub fn get(&mut self, block_nr: LogicalNr) -> Result<&Block, Error> {
         let block_type = self.alloc.block_type(block_nr)?;
-        let align = U::align(U::user_type(block_type));
+        let Some(user_block_type) = U::user_type(block_type) else {
+            return Err(Error::err(FBErrorKind::NoUserBlockType));
+        };
+        let align = U::align(user_block_type);
 
         self.alloc.get_block(&mut self.file, block_nr, align)
     }
@@ -161,7 +183,10 @@ where
     /// Get a data block.
     pub fn get_mut(&mut self, block_nr: LogicalNr) -> Result<&mut Block, Error> {
         let block_type = self.alloc.block_type(block_nr)?;
-        let align = U::align(U::user_type(block_type));
+        let Some(user_block_type) = U::user_type(block_type) else {
+            return Err(Error::err(FBErrorKind::NoUserBlockType));
+        };
+        let align = U::align(user_block_type);
 
         self.alloc.get_block_mut(&mut self.file, block_nr, align)
     }

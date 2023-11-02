@@ -121,10 +121,7 @@ impl Alloc {
 
         // write user blocks.
         for (block_nr, block) in &mut self.user {
-            let block_pnr = self.physical.physical_nr(*block_nr)?;
-            let is_dirty = block.is_dirty();
-
-            if is_dirty {
+            if block.is_dirty() {
                 let new_pnr = self.physical.pop_free();
                 self.physical.set_physical_nr(*block_nr, new_pnr)?;
 

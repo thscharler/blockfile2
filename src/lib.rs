@@ -16,7 +16,7 @@ pub trait UserBlockType: Copy {
     fn block_type(self) -> BlockType;
 
     /// Block-type to user block-type.
-    fn user_type(block_type: BlockType) -> Self;
+    fn user_type(block_type: BlockType) -> Option<Self>;
 
     /// Memory alignment for a user block-type.
     fn align(self) -> usize;
@@ -85,7 +85,7 @@ impl PartialOrd<u32> for PhysicalNr {
 
 /// Newtype for logical block-nr.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct LogicalNr(pub u32);
 
 impl LogicalNr {
@@ -181,6 +181,8 @@ pub enum FBErrorKind {
     NoFreeBlocks,
     /// Severe internal error.
     NoBlockMap,
+    /// No mapping to a user block-type exists.
+    NoUserBlockType,
 
     /// Not a known block-nr.
     InvalidBlock(LogicalNr),
@@ -226,4 +228,13 @@ impl Debug for Error {
         write!(f, "{:#?}", self.backtrace)?;
         Ok(())
     }
+}
+
+/// Helper trait to get the LEN for an array type (instead len() for a array *value*).
+pub trait Length {
+    const LEN: usize;
+}
+
+impl<T, const LENGTH: usize> Length for [T; LENGTH] {
+    const LEN: usize = LENGTH;
 }
