@@ -1,7 +1,7 @@
 use crate::blockmap::{block_io, UserTypes};
 use crate::{
-    Alloc, Block, BlockType, Error, FBErrorKind, HeaderBlock, LogicalNr, PhysicalBlock, TypesBlock,
-    UserBlockType,
+    Alloc, Block, BlockType, Error, FBErrorKind, HeaderBlock, LogicalNr, PhysicalBlock, State,
+    TypesBlock, UserBlockType,
 };
 use std::fmt::{Debug, Formatter};
 use std::fs::{File, OpenOptions};
@@ -21,7 +21,7 @@ where
     U: UserBlockType + Debug,
 {
     /// Init new block-file.
-    pub fn init(path: &Path, block_size: usize) -> Result<Self, Error> {
+    pub fn create(path: &Path, block_size: usize) -> Result<Self, Error> {
         let Ok(file) = File::create(path) else {
             return Err(Error::err(FBErrorKind::Create));
         };
@@ -60,9 +60,21 @@ where
         })
     }
 
+    /// For testing only. Triggers a panic at a specific step while storing the data.
+    /// Nice to test recovering.
+    #[cfg(debug_assertions)]
+    pub fn set_store_panic(&mut self, step: u32) {
+        self.alloc.set_store_panic(step);
+    }
+
     /// Stores all dirty blocks.
     pub fn store(&mut self) -> Result<(), Error> {
         self.alloc.store(&mut self.file)
+    }
+
+    /// Header state.
+    pub fn state(&self) -> State {
+        self.alloc.header().state()
     }
 
     /// Stores a compact copy. The copy contains no unused blocks.

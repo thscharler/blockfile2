@@ -50,6 +50,17 @@ pub(crate) fn store_raw(
     )
 }
 
+// Read the 0 block. This requires special attention as we use 0 as a marker for
+// "no physical block assigned" too.
+pub(crate) fn load_raw_0(file: &mut File, block: &mut Block) -> Result<(), Error> {
+    seek_block(file, PhysicalNr(0), block.block_size())?;
+    let result = file.read_exact(block.data.as_mut());
+    map_result(
+        result,
+        FBErrorKind::LoadRaw(block.block_nr(), PhysicalNr(0)),
+    )
+}
+
 // Read a block from storage.
 //
 // Panic
@@ -59,6 +70,7 @@ pub(crate) fn load_raw(
     physical_block: PhysicalNr,
     block: &mut Block,
 ) -> Result<(), Error> {
+    assert_ne!(physical_block, PhysicalNr(0));
     seek_block(file, physical_block, block.block_size())?;
     let result = file.read_exact(block.data.as_mut());
     map_result(

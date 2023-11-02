@@ -46,29 +46,29 @@ impl Types {
         block_size: usize,
         physical_block: PhysicalNr,
     ) -> Result<Self, Error> {
-        let mut types_0 = TypesBlock::new(_INIT_TYPES_NR, block_size);
-        block_io::load_raw(file, physical_block, &mut types_0.0)?;
+        let mut start_block = TypesBlock::new(_INIT_TYPES_NR, block_size);
+        block_io::load_raw(file, physical_block, &mut start_block.0)?;
 
-        let mut next = types_0.next_nr();
+        let mut next = start_block.next_nr();
 
         let mut new_self = Self {
             block_size,
-            blocks: vec![types_0],
+            blocks: vec![start_block],
             free: Vec::default(),
         };
 
         loop {
-            if next.as_u32() == 0 {
+            if next == 0 {
                 break;
             }
 
             let next_p = physical.physical_nr(next)?;
-            let mut types = TypesBlock::new(next, block_size);
-            block_io::load_raw(file, next_p, &mut types.0)?;
+            let mut block = TypesBlock::new(next, block_size);
+            block_io::load_raw(file, next_p, &mut block.0)?;
 
-            next = types.next_nr();
+            next = block.next_nr();
 
-            new_self.blocks.push(types);
+            new_self.blocks.push(block);
         }
 
         new_self.init_free_list();
@@ -78,8 +78,8 @@ impl Types {
 
     // Rebuild the free list.
     fn init_free_list(&mut self) {
-        for types_block in &self.blocks {
-            for (nr, ty) in types_block.iter_block_type() {
+        for types_block in self.blocks.iter().rev() {
+            for (nr, ty) in types_block.iter_block_type().rev() {
                 if ty == BlockType::Free || ty == BlockType::NotAllocated {
                     self.free.push(nr);
                 }
@@ -116,10 +116,16 @@ impl Types {
 
         let mut block = TypesBlock::new(new_nr, self.block_size);
         block.set_start_nr(start_nr);
-        for i in block.start_nr().as_u32()..block.end_nr().as_u32() {
-            self.free.push(LogicalNr(i));
-        }
+        let end_nr = block.end_nr();
         self.blocks.push(block);
+
+        // prepend newly available blocks to free list.
+        let mut free = Vec::new();
+        for i in (start_nr.as_u32()..end_nr.as_u32()).rev() {
+            free.push(LogicalNr(i));
+        }
+        free.extend(self.free.iter());
+        self.free = free;
     }
 
     /// Sets the block-type.
@@ -312,16 +318,33 @@ impl TypesBlock {
         self.0.set_dirty(true);
     }
 
-    pub fn iter_block_type(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> + '_ {
+    pub fn iter_block_type(
+        &self,
+    ) -> impl Iterator<Item = (LogicalNr, BlockType)> + DoubleEndedIterator + '_ {
         struct NrIter<'a> {
             idx: usize,
+            idx_end: usize,
             data: &'a BlockMapType,
+        }
+        impl<'a> DoubleEndedIterator for NrIter<'a> {
+            fn next_back(&mut self) -> Option<Self::Item> {
+                if self.idx_end <= self.idx {
+                    None
+                } else {
+                    self.idx_end -= 1;
+                    let v = (
+                        self.data.start_nr + self.idx_end as u32,
+                        self.data.block_type[self.idx_end],
+                    );
+                    Some(v)
+                }
+            }
         }
         impl<'a> Iterator for NrIter<'a> {
             type Item = (LogicalNr, BlockType);
 
             fn next(&mut self) -> Option<Self::Item> {
-                if self.idx >= self.data.block_type.len() {
+                if self.idx >= self.idx_end {
                     None
                 } else {
                     let v = (
@@ -336,6 +359,7 @@ impl TypesBlock {
 
         NrIter {
             idx: 0,
+            idx_end: self.data().block_type.len(),
             data: self.data(),
         }
     }

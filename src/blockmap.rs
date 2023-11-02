@@ -33,6 +33,8 @@ pub struct Alloc {
     physical: Physical,
     user: BTreeMap<LogicalNr, Block>,
     generation: u32,
+    #[cfg(debug_assertions)]
+    store_panic: u32,
 }
 
 impl Alloc {
@@ -49,6 +51,8 @@ impl Alloc {
             physical,
             user: Default::default(),
             generation: 0,
+            #[cfg(debug_assertions)]
+            store_panic: 0,
         };
         s.assert_block_type(block_size).expect("init-ok");
 
@@ -58,19 +62,25 @@ impl Alloc {
     /// Load from file.
     pub fn load(file: &mut File, block_size: usize) -> Result<Self, Error> {
         let mut header = HeaderBlock::new(block_size);
-        block_io::load_raw(file, PhysicalNr(0), &mut header.0)?;
+        block_io::load_raw_0(file, &mut header.0)?;
 
-        let physical_block = match header.state() {
+        let physical_pnr = match header.state() {
             State::Low => header.low_physical(),
             State::High => header.high_physical(),
         };
-        let physical = Physical::load(file, block_size, physical_block)?;
+        if physical_pnr == 0 {
+            return Err(Error::err(FBErrorKind::HeaderCorrupted));
+        }
+        let physical = Physical::load(file, block_size, physical_pnr)?;
 
-        let types_block = match header.state() {
+        let types_pnr = match header.state() {
             State::Low => header.low_types(),
             State::High => header.high_types(),
         };
-        let types = Types::load(file, &physical, block_size, types_block)?;
+        if types_pnr == 0 {
+            return Err(Error::err(FBErrorKind::HeaderCorrupted));
+        }
+        let types = Types::load(file, &physical, block_size, types_pnr)?;
 
         let s = Self {
             block_size,
@@ -79,10 +89,19 @@ impl Alloc {
             physical,
             user: Default::default(),
             generation: 0,
+            #[cfg(debug_assertions)]
+            store_panic: 0,
         };
         s.assert_block_type(block_size)?;
 
         Ok(s)
+    }
+
+    /// For testing only. Triggers a panic at a specific step while storing the data.
+    /// Nice to test recovering.
+    #[cfg(debug_assertions)]
+    pub fn set_store_panic(&mut self, step: u32) {
+        self.store_panic = step;
     }
 
     /// Store to file.
@@ -95,12 +114,17 @@ impl Alloc {
             block_io::store_raw(file, PhysicalNr(0), &default.0)?;
         }
 
+        #[cfg(debug_assertions)]
+        if self.store_panic == 1 {
+            panic!("invoke store_panic 1");
+        }
+
         // write user blocks.
         for (block_nr, block) in &mut self.user {
             let block_pnr = self.physical.physical_nr(*block_nr)?;
             let is_dirty = block.is_dirty();
 
-            if is_dirty || block_pnr.as_u32() == 0 {
+            if is_dirty {
                 let new_pnr = self.physical.pop_free();
                 self.physical.set_physical_nr(*block_nr, new_pnr)?;
 
@@ -110,11 +134,16 @@ impl Alloc {
             }
         }
 
+        #[cfg(debug_assertions)]
+        if self.store_panic == 2 {
+            panic!("invoke store_panic 2");
+        }
+
         // write block-types.
         for (block_nr, is_dirty) in self.types.iter_dirty() {
             let block_pnr = self.physical.physical_nr(block_nr)?;
 
-            if is_dirty || block_pnr.as_u32() == 0 {
+            if is_dirty || block_pnr == 0 {
                 let new_pnr = self.physical.pop_free();
                 self.physical.set_physical_nr(block_nr, new_pnr)?;
 
@@ -125,15 +154,25 @@ impl Alloc {
             }
         }
 
+        #[cfg(debug_assertions)]
+        if self.store_panic == 3 {
+            panic!("invoke store_panic 3");
+        }
+
         // assign physical block to physical block-maps before writing any of them.
         for (block_nr, is_dirty) in self.physical.iter_dirty() {
             let block_pnr = self.physical.physical_nr(block_nr)?;
-            if is_dirty || block_pnr.as_u32() == 0 {
+            if is_dirty || block_pnr == 0 {
                 let new_pnr = self.physical.pop_free();
                 self.physical.set_physical_nr(block_nr, new_pnr)?;
                 let block = self.physical.blockmap_mut(block_nr)?;
                 block.set_dirty(true);
             }
+        }
+
+        #[cfg(debug_assertions)]
+        if self.store_panic == 4 {
+            panic!("invoke store_panic 4");
         }
 
         // writing the physical maps is the last thing. now every block
@@ -150,6 +189,11 @@ impl Alloc {
             }
         }
 
+        #[cfg(debug_assertions)]
+        if self.store_panic == 5 {
+            panic!("invoke store_panic 5");
+        }
+
         // write root blocks
         let block_1_pnr = self.physical.physical_nr(_INIT_TYPES_NR)?;
         let block_2_pnr = self.physical.physical_nr(_INIT_PHYSICAL_NR)?;
@@ -160,6 +204,12 @@ impl Alloc {
                 self.header.store_high_types(file, block_1_pnr)?;
                 self.header.store_high_physical(file, block_2_pnr)?;
                 block_io::sync(file)?;
+
+                #[cfg(debug_assertions)]
+                if self.store_panic == 6 {
+                    panic!("invoke store_panic 6");
+                }
+
                 self.header.store_state(file, State::High)?;
                 block_io::sync(file)?;
             }
@@ -167,9 +217,20 @@ impl Alloc {
                 self.header.store_low_types(file, block_1_pnr)?;
                 self.header.store_low_physical(file, block_2_pnr)?;
                 block_io::sync(file)?;
+
+                #[cfg(debug_assertions)]
+                if self.store_panic == 6 {
+                    panic!("invoke store_panic 6");
+                }
+
                 self.header.store_state(file, State::Low)?;
                 block_io::sync(file)?;
             }
+        }
+
+        #[cfg(debug_assertions)]
+        if self.store_panic == 7 {
+            panic!("invoke store_panic 7");
         }
 
         // Rebuild the list of free physical pages.
@@ -388,7 +449,9 @@ impl Alloc {
         };
 
         let mut block = Block::new(block_nr, self.block_size, align, block_type);
-        block_io::load_raw(file, block_pnr, &mut block)?;
+        if block_pnr != 0 {
+            block_io::load_raw(file, block_pnr, &mut block)?;
+        }
 
         self.user.insert(block_nr, block);
 

@@ -1,4 +1,5 @@
 use std::backtrace::Backtrace;
+use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::io;
 use std::ops::{Add, AddAssign, Sub};
@@ -70,6 +71,18 @@ impl Sub for PhysicalNr {
     }
 }
 
+impl PartialEq<u32> for PhysicalNr {
+    fn eq(&self, other: &u32) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialOrd<u32> for PhysicalNr {
+    fn partial_cmp(&self, other: &u32) -> Option<Ordering> {
+        self.0.partial_cmp(other)
+    }
+}
+
 /// Newtype for logical block-nr.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,8 +132,26 @@ impl Sub for LogicalNr {
     }
 }
 
+impl PartialEq<u32> for LogicalNr {
+    fn eq(&self, other: &u32) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialOrd<u32> for LogicalNr {
+    fn partial_cmp(&self, other: &u32) -> Option<Ordering> {
+        self.0.partial_cmp(other)
+    }
+}
+
+impl From<u32> for LogicalNr {
+    fn from(value: u32) -> Self {
+        LogicalNr(value)
+    }
+}
+
 /// Error types.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FBErrorKind {
     /// Seek failed. IO error.
@@ -159,6 +190,8 @@ pub enum FBErrorKind {
     NoBlockType(LogicalNr),
     /// Severe load error. Block-data is garbage?
     InvalidBlockType(LogicalNr, BlockType),
+    /// Severe load error. Header is broken.
+    HeaderCorrupted,
 }
 
 /// Error.

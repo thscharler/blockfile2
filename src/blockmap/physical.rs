@@ -44,30 +44,30 @@ impl Physical {
 
     /// Load from file.
     pub fn load(file: &mut File, block_size: usize, block_pnr: PhysicalNr) -> Result<Self, Error> {
-        let mut block_0 = PhysicalBlock::new(_INIT_PHYSICAL_NR, block_size);
-        block_io::load_raw(file, block_pnr, &mut block_0.0)?;
+        let mut start_block = PhysicalBlock::new(_INIT_PHYSICAL_NR, block_size);
+        block_io::load_raw(file, block_pnr, &mut start_block.0)?;
 
-        let mut next = block_0.next_nr();
+        let mut next = start_block.next_nr();
 
         let mut new_self = Self {
             block_size,
-            blocks: vec![block_0],
+            blocks: vec![start_block],
             max: PhysicalNr(0),
             free: vec![],
         };
 
         loop {
-            if next.as_u32() == 0 {
+            if next == 0 {
                 break;
             }
 
             let next_pnr = new_self.physical_nr(next)?;
-            let mut physical_block = PhysicalBlock::new(next, block_size);
-            block_io::load_raw(file, next_pnr, &mut physical_block.0)?;
+            let mut block = PhysicalBlock::new(next, block_size);
+            block_io::load_raw(file, next_pnr, &mut block.0)?;
 
-            next = physical_block.next_nr();
+            next = block.next_nr();
 
-            new_self.blocks.push(physical_block);
+            new_self.blocks.push(block);
         }
 
         new_self.init_free_list();
@@ -84,15 +84,17 @@ impl Physical {
         for physical_block in &self.blocks {
             // build bitset of used blocks.
             for (nr, pnr) in physical_block.iter_nr() {
-                if nr.as_u32() == 0 || pnr.as_u32() != 0 {
+                if nr == 0 || pnr != 0 {
                     used_pnr.insert(pnr.as_usize());
                 }
             }
         }
 
         // find free blocks.
-        for i in 0..used_pnr.len() {
-            if i != 0 && !used_pnr.contains(i) {
+        let mut i = used_pnr.len();
+        while i > 0 {
+            i -= 1;
+            if !used_pnr.contains(i) {
                 self.free.push(PhysicalNr(i as u32));
             } else {
                 self.max = max(self.max, PhysicalNr(i as u32));
