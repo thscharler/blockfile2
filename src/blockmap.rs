@@ -25,6 +25,7 @@ pub const _INIT_HEADER_NR: LogicalNr = LogicalNr(0);
 pub const _INIT_TYPES_NR: LogicalNr = LogicalNr(1);
 pub const _INIT_PHYSICAL_NR: LogicalNr = LogicalNr(2);
 
+/// Manages allocations and block-buffers.
 #[derive(Debug)]
 pub struct Alloc {
     block_size: usize,
@@ -64,6 +65,7 @@ impl Alloc {
         let mut header = HeaderBlock::new(block_size);
         block_io::load_raw_0(file, &mut header.0)?;
 
+        // load physical map
         let physical_pnr = match header.state() {
             State::Low => header.low_physical(),
             State::High => header.high_physical(),
@@ -73,6 +75,7 @@ impl Alloc {
         }
         let physical = Physical::load(file, block_size, physical_pnr)?;
 
+        // load type map
         let types_pnr = match header.state() {
             State::Low => header.low_types(),
             State::High => header.high_types(),
@@ -92,6 +95,7 @@ impl Alloc {
             #[cfg(debug_assertions)]
             store_panic: 0,
         };
+
         s.assert_block_type(block_size)?;
 
         Ok(s)
@@ -287,6 +291,8 @@ impl Alloc {
         Ok(())
     }
 
+    /// Append a block for the physical map and the block map and links them
+    /// to the current one.
     fn append_blockmap(&mut self) -> Result<(), Error> {
         // new types-block
         let Some(types_nr) = self.types.pop_free() else {
@@ -316,7 +322,7 @@ impl Alloc {
         &self.header
     }
 
-    ///
+    /// For debug output only.
     pub(crate) fn types(&self) -> &Types {
         &self.types
     }
@@ -326,7 +332,7 @@ impl Alloc {
         (&self.types).into_iter()
     }
 
-    ///
+    /// For debug output only.
     pub(crate) fn physical(&self) -> &Physical {
         &self.physical
     }
@@ -455,10 +461,12 @@ impl Alloc {
         Ok(())
     }
 
+    /// Get the block-type for a block-nr.
     pub fn block_type(&self, logical: LogicalNr) -> Result<BlockType, Error> {
         self.types.block_type(logical)
     }
 
+    /// Get the physical block for a block-nr. Returns 0 if no such page has been assigned yet.
     pub fn physical_nr(&self, logical: LogicalNr) -> Result<PhysicalNr, Error> {
         self.physical.physical_nr(logical)
     }

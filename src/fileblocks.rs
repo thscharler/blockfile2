@@ -1,19 +1,28 @@
-use crate::blockmap::{block_io, UserTypes};
+use crate::blockmap::{block_io, Alloc, UserTypes};
 use crate::{
-    Alloc, Block, BlockType, Error, FBErrorKind, HeaderBlock, LogicalNr, PhysicalBlock, State,
-    TypesBlock, UserBlockType,
+    Block, BlockType, Error, FBErrorKind, HeaderBlock, LogicalNr, PhysicalBlock, State, TypesBlock,
+    UserBlockType,
 };
 use std::fmt::{Debug, Formatter};
 use std::fs::{File, OpenOptions};
 use std::marker::PhantomData;
 use std::path::Path;
 
+/// Manages a file split in equal-sized blocks.
+///
+/// Blocks can be allocated for a specific blocktype.
+/// The minimum block-size is 24 bytes, but something bigger is advisable.
+///
+/// The strategy for fail-safety is copy-on-write. Each logical block is mapped to a physical
+/// block and this mapping is updated for every safe. Unchanged blocks are ignored of course.
+/// This way every store can be seen as atomic.
 pub struct FileBlocks<U> {
     file: File,
     alloc: Alloc,
     _phantom: PhantomData<U>,
 }
 
+/// FileBlocks without user block-type mapping.
 pub type BasicFileBlocks = FileBlocks<BlockType>;
 
 impl<U> FileBlocks<U>

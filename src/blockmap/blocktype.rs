@@ -2,6 +2,10 @@ use crate::UserBlockType;
 use std::fmt::{Debug, Formatter};
 use std::mem::align_of;
 
+/// Available blocktypes.
+///
+/// The first 15 values are reserved for internal use, the rest can be used.
+/// Currently there are 16 defined values.
 #[non_exhaustive]
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

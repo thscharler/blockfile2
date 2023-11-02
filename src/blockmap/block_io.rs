@@ -6,6 +6,7 @@ use std::fs::{File, Metadata};
 use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
 
+/// Map io::Error to Error
 pub(crate) fn map_error(err: io::Error, kind: FBErrorKind) -> Error {
     Error {
         kind,
@@ -14,6 +15,7 @@ pub(crate) fn map_error(err: io::Error, kind: FBErrorKind) -> Error {
     }
 }
 
+/// Map io::Error to Error
 pub(crate) fn map_result<T>(err: Result<T, io::Error>, kind: FBErrorKind) -> Result<T, Error> {
     match err {
         Ok(v) => Ok(v),
@@ -21,22 +23,22 @@ pub(crate) fn map_result<T>(err: Result<T, io::Error>, kind: FBErrorKind) -> Res
     }
 }
 
-// Sync file storage.
+/// Sync file storage.
 pub(crate) fn sync(file: &mut File) -> Result<(), Error> {
     let result = file.sync_all();
     map_result(result, FBErrorKind::Sync)
 }
 
-// Metadata
+/// Metadata
 pub(crate) fn metadata(file: &mut File) -> Result<Metadata, Error> {
     let result = file.metadata();
     map_result(result, FBErrorKind::Metadata)
 }
 
-// Write a block to storage.
-//
-// Panic
-// panics if the block was not allocated or if it isn't the next-to-last block.
+/// Write a block to storage.
+///
+/// Panic
+/// panics if the block was not allocated or if it isn't the next-to-last block.
 pub(crate) fn store_raw(
     file: &mut File,
     physical_block: PhysicalNr,
@@ -50,8 +52,8 @@ pub(crate) fn store_raw(
     )
 }
 
-// Read the 0 block. This requires special attention as we use 0 as a marker for
-// "no physical block assigned" too.
+/// Read the 0 block. This requires special attention as we use 0 as a marker for
+/// "no physical block assigned" too.
 pub(crate) fn load_raw_0(file: &mut File, block: &mut Block) -> Result<(), Error> {
     seek_block(file, PhysicalNr(0), block.block_size())?;
     let result = file.read_exact(block.data.as_mut());
@@ -61,10 +63,10 @@ pub(crate) fn load_raw_0(file: &mut File, block: &mut Block) -> Result<(), Error
     )
 }
 
-// Read a block from storage.
-//
-// Panic
-// panics if the block does not exist in storage.
+/// Read a block from storage.
+///
+/// Panic
+/// panics if the block does not exist in storage.
 pub(crate) fn load_raw(
     file: &mut File,
     physical_block: PhysicalNr,
@@ -79,7 +81,10 @@ pub(crate) fn load_raw(
     )
 }
 
-// Seek to the block_nr
+/// Seek to the block_nr
+///
+/// Panics
+/// Panics if the seek fails.
 fn seek_block(
     file: &mut File,
     physical_block: PhysicalNr,
@@ -95,10 +100,10 @@ fn seek_block(
         })
 }
 
-// Write a block to storage.
-//
-// Panic
-// panics if the block was not allocated or if it isn't the next-to-last block.
+/// Write a block to storage.
+///
+/// Panic
+/// panics if the block was not allocated or if it isn't the next-to-last block.
 pub(crate) fn sub_store_raw(
     file: &mut File,
     physical_block: PhysicalNr,
@@ -112,7 +117,10 @@ pub(crate) fn sub_store_raw(
     map_result(result, FBErrorKind::SubStoreRaw(physical_block))
 }
 
-// Seek to the block_nr
+/// Seek to the block_nr
+///
+/// Panic
+/// Panics if the seek fails.
 fn sub_seek_block(
     file: &mut File,
     physical_block: PhysicalNr,

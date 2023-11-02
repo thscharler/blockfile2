@@ -6,17 +6,20 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::ops::Range;
 use std::ptr;
 
-/// Manage block-types.
+/// Manages block-types.
 pub(crate) struct Types {
     block_size: usize,
     blocks: Vec<TypesBlock>,
     free: Vec<LogicalNr>,
 }
 
+/// Wrapper around a block of the type-map.
 pub struct TypesBlock(pub(crate) Block);
 
+/// dyn-sized struct for the block-types. Grows with the block-size.
 #[repr(C)]
 struct BlockMapType {
     start_nr: LogicalNr,
@@ -25,6 +28,7 @@ struct BlockMapType {
 }
 
 impl Types {
+    /// Init new type-map.
     pub fn init(block_size: usize) -> Self {
         let mut block_0 = TypesBlock::init(block_size);
         block_0.set_dirty(true);
@@ -40,6 +44,7 @@ impl Types {
         new_self
     }
 
+    /// Load from file
     pub fn load(
         file: &mut File,
         physical: &Physical,
@@ -76,7 +81,7 @@ impl Types {
         Ok(new_self)
     }
 
-    // Rebuild the free list.
+    /// Rebuild the free list.
     fn init_free_list(&mut self) {
         for types_block in self.blocks.iter().rev() {
             for (nr, ty) in types_block.iter_block_type().rev() {
@@ -108,26 +113,6 @@ impl Types {
         Ok(())
     }
 
-    /// Append a blockmap.
-    pub fn append_blockmap(&mut self, new_nr: LogicalNr) {
-        let last_block = self.blocks.last_mut().expect("last");
-        let start_nr = last_block.end_nr();
-        last_block.set_next_nr(new_nr);
-
-        let mut block = TypesBlock::new(new_nr, self.block_size);
-        block.set_start_nr(start_nr);
-        let end_nr = block.end_nr();
-        self.blocks.push(block);
-
-        // prepend newly available blocks to free list.
-        let mut free = Vec::new();
-        for i in (start_nr.as_u32()..end_nr.as_u32()).rev() {
-            free.push(LogicalNr(i));
-        }
-        free.extend(self.free.iter());
-        self.free = free;
-    }
-
     /// Sets the block-type.
     pub fn set_block_type(
         &mut self,
@@ -147,6 +132,26 @@ impl Types {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
         };
         map.block_type(block_nr)
+    }
+
+    /// Append a blockmap.
+    pub fn append_blockmap(&mut self, new_nr: LogicalNr) {
+        let last_block = self.blocks.last_mut().expect("last");
+        let start_nr = last_block.end_nr();
+        last_block.set_next_nr(new_nr);
+
+        let mut block = TypesBlock::new(new_nr, self.block_size);
+        block.set_start_nr(start_nr);
+        let end_nr = block.end_nr();
+        self.blocks.push(block);
+
+        // prepend newly available blocks to free list.
+        let mut free = Vec::new();
+        for i in (start_nr.as_u32()..end_nr.as_u32()).rev() {
+            free.push(LogicalNr(i));
+        }
+        free.extend(self.free.iter());
+        self.free = free;
     }
 
     /// Returns the block-map with the given block-nr.
@@ -197,7 +202,7 @@ impl Types {
         DirtyIter { idx: 0, blocks }
     }
 
-    /// Iterate
+    /// Iterate block-nr and type.
     pub fn iter_block_type(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> {
         struct TyIter {
             idx: usize,
@@ -227,13 +232,13 @@ impl Types {
         TyIter { idx: 0, blocks }
     }
 
-    // Get the blockmap that contains the given block-nr.
+    /// Get the blockmap that contains the given block-nr.
     fn map(&self, block_nr: LogicalNr) -> Option<&TypesBlock> {
         let map_idx = block_nr.as_u32() / TypesBlock::len_types_g(self.block_size) as u32;
         self.blocks.get(map_idx as usize)
     }
 
-    // Get the blockmap that contains the given block-nr.
+    /// Get the blockmap that contains the given block-nr.
     fn map_mut(&mut self, block_nr: LogicalNr) -> Option<&mut TypesBlock> {
         let map_idx = block_nr.as_u32() / TypesBlock::len_types_g(self.block_size) as u32;
         self.blocks.get_mut(map_idx as usize)
@@ -250,6 +255,7 @@ impl<'a> IntoIterator for &'a Types {
 }
 
 impl TypesBlock {
+    /// Init default.
     pub(super) fn init(block_size: usize) -> Self {
         let mut block_0 = Block::new(_INIT_TYPES_NR, block_size, 4, BlockType::Types);
         let types_0 = Self::data_mut_g(&mut block_0);
@@ -260,64 +266,79 @@ impl TypesBlock {
         Self(block_0)
     }
 
+    /// New type-map block.
     pub(super) fn new(block_nr: LogicalNr, block_size: usize) -> Self {
         Self(Block::new(block_nr, block_size, 4, BlockType::Types))
     }
 
+    /// Alignment of the buffer.
     pub fn block_align(&self) -> usize {
         self.0.block_align()
     }
 
+    /// Size of the buffer.
     pub fn block_size(&self) -> usize {
         self.0.block_size()
     }
 
+    /// Logical block-nr.
     pub fn block_nr(&self) -> LogicalNr {
         self.0.block_nr()
     }
 
+    /// Modified?
     pub fn is_dirty(&self) -> bool {
         self.0.is_dirty()
     }
 
+    /// Modified?
     pub fn set_dirty(&mut self, dirty: bool) {
         self.0.set_dirty(dirty);
     }
 
+    /// Generation of the last store.
     pub fn generation(&self) -> u32 {
         self.0.generation()
     }
 
+    /// Calculate the length for the dyn-sized BlockMapType.
     pub const fn len_types_g(block_size: usize) -> usize {
         (block_size - size_of::<LogicalNr>() - size_of::<LogicalNr>()) / size_of::<BlockType>()
     }
 
+    /// Length for the dyn-sized BlockMapType.
     pub fn len_types(&self) -> usize {
         Self::len_types_g(self.0.block_size())
     }
 
+    /// First block-nr contained.
     pub fn start_nr(&self) -> LogicalNr {
         self.data().start_nr
     }
 
+    /// Set the first block-nr.
     pub(super) fn set_start_nr(&mut self, start_nr: LogicalNr) {
         self.data_mut().start_nr = start_nr;
         self.0.set_dirty(true);
     }
 
+    /// Last block-nr. This one is exclusive as in start_nr..end_nr.
     pub fn end_nr(&self) -> LogicalNr {
         self.start_nr() + self.len_types() as u32
     }
 
+    /// Block-nr of the next block-map.
     pub fn next_nr(&self) -> LogicalNr {
         self.data().next_nr
     }
 
+    /// Block-nr of the next block-map.
     pub(super) fn set_next_nr(&mut self, next_nr: LogicalNr) {
         self.data_mut().next_nr = next_nr;
         self.0.set_dirty(true);
     }
 
+    /// Iterate LogicalNr+BlockType for this part of the block-map.
     pub fn iter_block_type(
         &self,
     ) -> impl Iterator<Item = (LogicalNr, BlockType)> + DoubleEndedIterator + '_ {
@@ -364,16 +385,12 @@ impl TypesBlock {
         }
     }
 
-    /// Iterate the block-types.
-    pub fn iter(&self) -> impl Iterator<Item = BlockType> + '_ {
-        self.data().block_type.iter().copied()
-    }
-
     /// Contains this block-nr.
     pub fn contains(&self, block_nr: LogicalNr) -> bool {
         block_nr >= self.start_nr() && block_nr < self.end_nr()
     }
 
+    /// Set the blocktype for a block contained in this part.
     pub(super) fn set_block_type(
         &mut self,
         block_nr: LogicalNr,
@@ -389,6 +406,7 @@ impl TypesBlock {
         }
     }
 
+    /// Get the blocktype for a block contained in this part.
     pub fn block_type(&self, block_nr: LogicalNr) -> Result<BlockType, Error> {
         if self.contains(block_nr) {
             let idx = (block_nr - self.start_nr()) as usize;
@@ -398,6 +416,7 @@ impl TypesBlock {
         }
     }
 
+    /// Creates a view over the block.
     fn data_mut_g(block: &mut Block) -> &mut BlockMapType {
         unsafe {
             debug_assert!(8 <= block.block_size());
@@ -409,10 +428,12 @@ impl TypesBlock {
         }
     }
 
+    /// Creates a view over the block.
     fn data_mut(&mut self) -> &mut BlockMapType {
         Self::data_mut_g(&mut self.0)
     }
 
+    /// Creates a view over the block.
     fn data(&self) -> &BlockMapType {
         unsafe {
             debug_assert!(8 <= self.0.block_size());
@@ -434,7 +455,9 @@ impl Debug for TypesBlock {
     }
 }
 
+/// Wrapper around UserTypes to get the UserBlockTypes for debug output.
 pub(crate) struct UserTypes<'a, U>(pub &'a Types, pub PhantomData<U>);
+/// Wrapper around UserTypes to get the UserBlockTypes for debug output.
 pub(crate) struct UserTypesBlock<'a, U>(&'a TypesBlock, PhantomData<U>);
 
 impl<'a, U> Debug for UserTypes<'a, U>

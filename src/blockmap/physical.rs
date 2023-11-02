@@ -8,6 +8,7 @@ use std::fs::File;
 use std::mem::{align_of, size_of};
 use std::ptr;
 
+/// Manages the map logical->physical block.
 pub(crate) struct Physical {
     block_size: usize,
     blocks: Vec<PhysicalBlock>,
@@ -15,8 +16,10 @@ pub(crate) struct Physical {
     free: Vec<PhysicalNr>,
 }
 
+/// Wrapper around a block.
 pub struct PhysicalBlock(pub(crate) Block);
 
+/// dyn-sized struct for the map. Grows with the block-size.
 #[repr(C)]
 #[derive(Debug)]
 struct BlockMapPhysical {
@@ -26,6 +29,7 @@ struct BlockMapPhysical {
 }
 
 impl Physical {
+    /// Init new map.
     pub fn init(block_size: usize) -> Self {
         let mut block_0 = PhysicalBlock::init(block_size);
         block_0.set_dirty(true);
@@ -122,12 +126,6 @@ impl Physical {
         block.set_physical_nr(block_nr, PhysicalNr(0))?;
         self.free.push(pnr);
         Ok(())
-    }
-
-    /// Maximum physical block.
-    #[allow(dead_code)]
-    pub fn max_physical_nr(&self) -> PhysicalNr {
-        self.max
     }
 
     /// Set the physical block.
@@ -235,11 +233,13 @@ impl<'a> IntoIterator for &'a Physical {
 }
 
 impl PhysicalBlock {
+    /// Init default.
     pub(super) fn init(block_size: usize) -> Self {
         let block_0 = Block::new(_INIT_PHYSICAL_NR, block_size, 4, BlockType::Physical);
         Self(block_0)
     }
 
+    /// New physical-map block.
     pub(super) fn new(block_nr: LogicalNr, block_size: usize) -> Self {
         Self(Block::new(
             block_nr,
@@ -249,60 +249,74 @@ impl PhysicalBlock {
         ))
     }
 
+    /// Alignment of the buffer.
     pub fn block_align(&self) -> usize {
         self.0.block_align()
     }
 
+    /// Size of the buffer.
     pub fn block_size(&self) -> usize {
         self.0.block_size()
     }
 
+    /// Logical block-nr.
     pub fn block_nr(&self) -> LogicalNr {
         self.0.block_nr()
     }
 
+    /// Modified?
     pub fn is_dirty(&self) -> bool {
         self.0.is_dirty()
     }
 
+    /// Modified?
     pub fn set_dirty(&mut self, dirty: bool) {
         self.0.set_dirty(dirty);
     }
 
+    /// Generation of the last store.
     pub fn generation(&self) -> u32 {
         self.0.generation()
     }
 
+    /// Calculate the length for the dyn-sized BlockMapPhysical.
     pub const fn len_physical_g(block_size: usize) -> usize {
         (block_size - size_of::<LogicalNr>() - size_of::<LogicalNr>()) / size_of::<PhysicalNr>()
     }
 
+    /// Length for the dyn-sized BlockMapPhysical.
     pub fn len_physical(&self) -> usize {
         Self::len_physical_g(self.0.block_size())
     }
 
+    /// First block-nr contained.
     pub fn start_nr(&self) -> LogicalNr {
         self.data().start_nr
     }
 
+    /// Set the first block-nr.
     pub(super) fn set_start_nr(&mut self, start_nr: LogicalNr) {
         self.data_mut().start_nr = start_nr;
         self.0.set_dirty(true);
     }
 
+    /// Last block-nr. This one is exclusive as in start_nr..end_nr.
     pub fn end_nr(&self) -> LogicalNr {
         self.start_nr() + self.len_physical() as u32
     }
 
+    /// Block-nr of the next block-map.
     pub fn next_nr(&self) -> LogicalNr {
         self.data().next_nr
     }
 
+    /// Block-nr of the next block-map.
     pub(super) fn set_next_nr(&mut self, next_nr: LogicalNr) {
         self.data_mut().next_nr = next_nr;
         self.0.set_dirty(true);
     }
 
+    /// Iterate LogicalNr+PhysicalNr for this part of the map.
     pub fn iter_nr(&self) -> impl Iterator<Item = (LogicalNr, PhysicalNr)> + '_ {
         struct NrIter<'a> {
             idx: usize,
@@ -331,16 +345,12 @@ impl PhysicalBlock {
         }
     }
 
-    /// Iterate the block-types.
-    pub fn iter(&self) -> impl Iterator<Item = PhysicalNr> + '_ {
-        self.data().physical.iter().copied()
-    }
-
     /// Contains this block-nr.
     pub fn contains(&self, block_nr: LogicalNr) -> bool {
         block_nr >= self.start_nr() && block_nr < self.end_nr()
     }
 
+    /// Set the physical block for a block contained in this part.
     pub(super) fn set_physical_nr(
         &mut self,
         block_nr: LogicalNr,
@@ -356,6 +366,7 @@ impl PhysicalBlock {
         }
     }
 
+    /// Get the physical block for a block contained in this part.
     pub fn physical_nr(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
         if self.contains(block_nr) {
             let idx = (block_nr - self.start_nr()) as usize;
@@ -365,6 +376,7 @@ impl PhysicalBlock {
         }
     }
 
+    /// Creates a view over the block.
     fn data_mut_g(block: &mut Block) -> &mut BlockMapPhysical {
         unsafe {
             debug_assert!(8 <= block.block_size());
@@ -376,10 +388,12 @@ impl PhysicalBlock {
         }
     }
 
+    /// Creates a view over the block.
     fn data_mut(&mut self) -> &mut BlockMapPhysical {
         Self::data_mut_g(&mut self.0)
     }
 
+    /// Creates a view over the block.
     fn data(&self) -> &BlockMapPhysical {
         unsafe {
             debug_assert!(8 <= self.0.block_size());

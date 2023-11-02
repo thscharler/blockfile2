@@ -5,17 +5,21 @@ use std::fmt::{Debug, Formatter};
 use std::mem::{align_of, align_of_val, size_of};
 use std::{alloc, mem};
 
+/// Data for one block of the file.
 pub struct Block {
     block_nr: LogicalNr,
     block_type: BlockType,
     dirty: bool,
     discard: bool,
     generation: u32,
+    /// Datablock
     pub data: Box<[u8]>,
 }
 
 impl Block {
-    pub fn new(
+    /// New block.
+    /// The alignment is used when allocating the data-block of block-size bytes.
+    pub(crate) fn new(
         block_nr: LogicalNr,
         block_size: usize,
         align: usize,
@@ -31,56 +35,76 @@ impl Block {
         }
     }
 
+    /// Logical block-nr.
     pub fn block_nr(&self) -> LogicalNr {
         self.block_nr
     }
 
+    /// Block-type.
     pub fn block_type(&self) -> BlockType {
         self.block_type
     }
 
+    /// Modified.
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
 
+    /// Modified.
     pub fn set_dirty(&mut self, dirty: bool) {
         self.dirty = dirty;
     }
 
+    /// Discard the block after store.
     pub fn is_discard(&self) -> bool {
         self.discard
     }
 
+    /// Discard the block after store.
     pub fn set_discard(&mut self, discard: bool) {
         self.discard = discard
     }
 
+    /// Generation when this last was stored.
     pub fn generation(&self) -> u32 {
         self.generation
     }
 
-    pub fn set_generation(&mut self, generation: u32) {
+    /// Generation when this last was stored.
+    pub(crate) fn set_generation(&mut self, generation: u32) {
         self.generation = generation;
     }
 
+    /// Align of the allocated block. The alignment given for construction is the *minimal*
+    /// alignment, so this value can differ.
     pub fn block_align(&self) -> usize {
         align_of_val(&self.data)
     }
 
+    /// Block-size.
     pub fn block_size(&self) -> usize {
         self.data.len()
     }
 
+    /// Fill with 0.
     pub fn clear(&mut self) {
         self.data.fill(0);
     }
 
+    /// Transmutes the buffer to a reference to T.
+    /// Asserts that size and alignment match.
+    ///
+    /// See types.rs/TypesBlock::data() for dyn-sized mappings.
     pub fn cast<T>(&self) -> &T {
         debug_assert_eq!(self.block_size(), size_of::<T>());
         debug_assert!(self.block_align() >= align_of::<T>());
         unsafe { mem::transmute(&self.data[0]) }
     }
 
+    /// Transmutes the buffer to a reference to T.
+    /// Asserts that size and alignment match.
+    ///
+    /// See types.rs/TypesBlock::data() for dyn-sized mappings.
     pub fn cast_mut<T>(&mut self) -> &mut T {
         debug_assert_eq!(self.block_size(), size_of::<T>());
         debug_assert!(self.block_align() >= align_of::<T>());
@@ -91,19 +115,14 @@ impl Block {
 impl Debug for Block {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let width = f.width().unwrap_or(0);
-        let mut s = f.debug_struct("Block");
-        s.field(
-            "",
-            &format_args!("[{}]={:?}", self.block_nr, self.block_type),
-        );
-        s.field(
-            "flags",
-            &format_args!(
-                "{} {}",
-                if self.dirty { "dirty " } else { "" },
-                if self.discard { "discard " } else { "" }
-            ),
-        );
+        writeln!(
+            f,
+            "[{}]={:?} {} {}",
+            self.block_nr,
+            self.block_type,
+            if self.dirty { "dirty " } else { "" },
+            if self.discard { "discard " } else { "" }
+        )?;
         if width >= 1 {
             struct RefBlock<'a>(&'a [u8]);
             impl<'a> Debug for RefBlock<'a> {
@@ -140,13 +159,13 @@ impl Debug for Block {
                     Ok(())
                 }
             }
-            s.field("block", &RefBlock(self.data.as_ref()));
+            writeln!(f, "{:?}", RefBlock(self.data.as_ref()))?;
         }
-        s.finish()?;
         Ok(())
     }
 }
 
+/// Create a dyn box for the buffer.
 fn alloc_box_buffer(len: usize, align: usize) -> Box<[u8]> {
     if len == 0 {
         return <Box<[u8]>>::default();

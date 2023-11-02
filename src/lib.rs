@@ -7,10 +7,10 @@ use std::ops::{Add, AddAssign, Sub};
 mod blockmap;
 mod fileblocks;
 
-pub use crate::blockmap::{Alloc, Block, BlockType, HeaderBlock, PhysicalBlock, State, TypesBlock};
+pub use crate::blockmap::{Block, BlockType, HeaderBlock, PhysicalBlock, State, TypesBlock};
 pub use crate::fileblocks::{BasicFileBlocks, FileBlocks};
 
-/// User data blocks.
+/// User defined mapping of block-types.
 pub trait UserBlockType: Copy {
     /// User block-type to block-type.
     fn block_type(self) -> BlockType;
@@ -53,7 +53,7 @@ impl Add<u32> for PhysicalNr {
     type Output = PhysicalNr;
 
     fn add(self, rhs: u32) -> Self::Output {
-        PhysicalNr(self.as_u32() + rhs)
+        PhysicalNr(self.0 + rhs)
     }
 }
 
@@ -67,7 +67,7 @@ impl Sub for PhysicalNr {
     type Output = u32;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        self.as_u32() - rhs.as_u32()
+        self.0 - rhs.0
     }
 }
 
@@ -114,7 +114,7 @@ impl Add<u32> for LogicalNr {
     type Output = LogicalNr;
 
     fn add(self, rhs: u32) -> Self::Output {
-        LogicalNr(self.as_u32() + rhs)
+        LogicalNr(self.0 + rhs)
     }
 }
 
@@ -128,7 +128,7 @@ impl Sub for LogicalNr {
     type Output = u32;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        self.as_u32() - rhs.as_u32()
+        self.0 - rhs.0
     }
 }
 

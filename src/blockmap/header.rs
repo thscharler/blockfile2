@@ -5,8 +5,10 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::mem::{align_of, size_of};
 
+/// file-header block.
 pub struct HeaderBlock(pub(super) Block);
 
+/// State of the header-block. This indicates which copy of the metadata is currently valid.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum State {
@@ -14,6 +16,9 @@ pub enum State {
     High = 1,
 }
 
+/// View over the block with meta-data.
+///
+/// The state indicates which copy is valid.
 #[repr(C)]
 #[derive(Debug)]
 struct BlockMapHeader {
@@ -26,6 +31,7 @@ struct BlockMapHeader {
 }
 
 impl HeaderBlock {
+    /// Init default.
     pub(super) fn init(block_size: usize) -> Self {
         let mut block_0 = Block::new(
             _INIT_HEADER_NR,
@@ -51,6 +57,7 @@ impl HeaderBlock {
         Self(block_0)
     }
 
+    /// New header block.
     pub(super) fn new(block_size: usize) -> Self {
         Self(Block::new(
             _INIT_HEADER_NR,
@@ -60,6 +67,7 @@ impl HeaderBlock {
         ))
     }
 
+    /// Block-nr.
     pub fn block_nr(&self) -> LogicalNr {
         self.0.block_nr()
     }
@@ -70,6 +78,8 @@ impl HeaderBlock {
     const OFFSET_HIGH_TYPES: usize = 16;
     const OFFSET_HIGH_PHYSICAL: usize = 20;
 
+    /// Set the state independent of the rest of the data.
+    /// Needs a sync afterwards to make this atomic.
     pub(super) fn store_state(&mut self, file: &mut File, state: State) -> Result<(), Error> {
         let state_bytes = (state as u32).to_ne_bytes();
         block_io::sub_store_raw(
@@ -83,10 +93,12 @@ impl HeaderBlock {
         Ok(())
     }
 
+    /// Current state.
     pub fn state(&self) -> State {
         self.data().state
     }
 
+    /// Stores the physical block for the first type-map.
     pub(super) fn store_low_types(
         &mut self,
         file: &mut File,
@@ -104,10 +116,12 @@ impl HeaderBlock {
         Ok(())
     }
 
+    /// Low version of the physical block for the first type-map.
     pub fn low_types(&self) -> PhysicalNr {
         self.data().low_types
     }
 
+    /// Stores the physical block for the first block-map.
     pub(super) fn store_low_physical(
         &mut self,
         file: &mut File,
@@ -125,10 +139,12 @@ impl HeaderBlock {
         Ok(())
     }
 
+    /// Low version of the physical block for the first block-map.
     pub fn low_physical(&self) -> PhysicalNr {
         self.data().low_physical
     }
 
+    /// Stores the physical block for the first type-map.
     pub(super) fn store_high_types(
         &mut self,
         file: &mut File,
@@ -146,10 +162,12 @@ impl HeaderBlock {
         Ok(())
     }
 
+    /// High version of the physical block for the first type-map.
     pub fn high_types(&self) -> PhysicalNr {
         self.data().high_types
     }
 
+    /// Stores the physical block for the first block-map.
     pub(super) fn store_high_physical(
         &mut self,
         file: &mut File,
@@ -167,14 +185,17 @@ impl HeaderBlock {
         Ok(())
     }
 
+    /// Low version of the physical block for the first block-map.
     pub fn high_physical(&self) -> PhysicalNr {
         self.data().high_physical
     }
 
+    /// Stored block-size.
     pub fn stored_block_size(&self) -> usize {
         self.data().block_size as usize
     }
 
+    /// View over the block-data.
     fn data_mut_g(block: &mut Block) -> &mut BlockMapHeader {
         unsafe {
             debug_assert!(size_of::<BlockMapHeader>() <= block.block_size());
@@ -183,10 +204,12 @@ impl HeaderBlock {
         }
     }
 
+    /// View over the block-data.
     fn data_mut(&mut self) -> &mut BlockMapHeader {
         Self::data_mut_g(&mut self.0)
     }
 
+    /// View over the block-data.
     fn data(&self) -> &BlockMapHeader {
         unsafe {
             debug_assert!(size_of::<BlockMapHeader>() <= self.0.block_size());
