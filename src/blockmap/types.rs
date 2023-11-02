@@ -60,7 +60,7 @@ impl Types {
                 break;
             }
 
-            let next_p = physical.map_block_pnr(next)?;
+            let next_p = physical.physical_nr(next)?;
             let mut types = TypesBlock::new(next, block_size);
             block_io::load_raw(file, next_p, &mut types.0)?;
 
@@ -74,9 +74,10 @@ impl Types {
         Ok(new_self)
     }
 
+    // Rebuild the free list.
     fn init_free_list(&mut self) {
         for types_block in &self.blocks {
-            for (nr, ty) in types_block.iter_nr() {
+            for (nr, ty) in types_block.iter_block_type() {
                 if ty == BlockType::Free || ty == BlockType::NotAllocated {
                     self.free.push(nr);
                 }
@@ -84,21 +85,34 @@ impl Types {
         }
     }
 
+    /// How many free blocks are addressable?
     pub fn free_len(&self) -> usize {
         self.free.len()
     }
 
+    /// Get a free block from the currently adressable.
     pub fn pop_free(&mut self) -> Option<LogicalNr> {
         self.free.pop()
+    }
+
+    /// Free a physical block.
+    pub fn free_block(&mut self, block_nr: LogicalNr) -> Result<(), Error> {
+        let Some(block) = self.map_mut(block_nr) else {
+            return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
+        };
+
+        block.set_block_type(block_nr, BlockType::Free)?;
+        self.free.push(block_nr);
+        Ok(())
     }
 
     /// Append a blockmap.
     pub fn append_blockmap(&mut self, new_nr: LogicalNr) {
         let last_block = self.blocks.last_mut().expect("last");
+        let start_nr = last_block.end_nr();
         last_block.set_next_nr(new_nr);
 
         let mut block = TypesBlock::new(new_nr, self.block_size);
-        let start_nr = self.max_nr();
         block.set_start_nr(start_nr);
         for i in block.start_nr().as_u32()..block.end_nr().as_u32() {
             self.free.push(LogicalNr(i));
@@ -106,12 +120,7 @@ impl Types {
         self.blocks.push(block);
     }
 
-    /// Maximum currently adressable logical block.
-    fn max_nr(&self) -> LogicalNr {
-        let types_block = self.blocks.last().expect("last");
-        types_block.end_nr()
-    }
-
+    /// Sets the block-type.
     pub fn set_block_type(
         &mut self,
         block_nr: LogicalNr,
@@ -124,6 +133,7 @@ impl Types {
         Ok(())
     }
 
+    /// Returns the block-type.
     pub fn block_type(&self, block_nr: LogicalNr) -> Result<BlockType, Error> {
         let Some(map) = self.map(block_nr) else {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
@@ -131,6 +141,7 @@ impl Types {
         map.block_type(block_nr)
     }
 
+    /// Returns the block-map with the given block-nr.
     pub fn blockmap(&self, block_nr: LogicalNr) -> Result<&TypesBlock, Error> {
         let find = self.blocks.iter().find(|v| v.block_nr() == block_nr);
         match find {
@@ -139,6 +150,7 @@ impl Types {
         }
     }
 
+    /// Returns the block-map with the given block-nr.
     pub fn blockmap_mut(&mut self, block_nr: LogicalNr) -> Result<&mut TypesBlock, Error> {
         let find = self.blocks.iter_mut().find(|v| v.block_nr() == block_nr);
         match find {
@@ -147,7 +159,7 @@ impl Types {
         }
     }
 
-    // Iterate all physical blocks. Adds the dirty flag to the result.
+    /// Iterate all physical blocks. Adds the dirty flag to the result.
     pub fn iter_dirty(&self) -> impl Iterator<Item = (LogicalNr, bool)> {
         struct DirtyIter {
             idx: usize,
@@ -176,51 +188,43 @@ impl Types {
         DirtyIter { idx: 0, blocks }
     }
 
-    pub fn iter_nr(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> + '_ {
-        struct ItNr<'a> {
-            block_idx: usize,
-            type_idx: usize,
-            block: &'a [TypesBlock],
+    /// Iterate
+    pub fn iter_block_type(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> {
+        struct TyIter {
+            idx: usize,
+            blocks: Vec<(LogicalNr, BlockType)>,
         }
-
-        impl<'a> Iterator for ItNr<'a> {
+        impl Iterator for TyIter {
             type Item = (LogicalNr, BlockType);
 
             fn next(&mut self) -> Option<Self::Item> {
-                if self.block_idx + 1 >= self.block.len() {
-                    return None;
-                }
-
-                let block = &self.block[self.block_idx];
-                let data = block.data();
-
-                let block_nr = data.start_nr + self.type_idx as u32;
-                let block_ty = block.data().block_type[self.type_idx];
-
-                // next
-                if self.type_idx + 1 < data.block_type.len() {
-                    self.type_idx += 1;
+                if self.idx >= self.blocks.len() {
+                    None
                 } else {
-                    self.block_idx += 1;
-                    self.type_idx = 0;
+                    let next = self.blocks[self.idx];
+                    self.idx += 1;
+                    Some(next)
                 }
-
-                Some((block_nr, block_ty))
             }
         }
 
-        ItNr {
-            block_idx: 0,
-            type_idx: 0,
-            block: self.blocks.as_ref(),
+        let mut blocks = Vec::new();
+        for block in &self.blocks {
+            for v in block.iter_block_type() {
+                blocks.push(v)
+            }
         }
+
+        TyIter { idx: 0, blocks }
     }
 
+    // Get the blockmap that contains the given block-nr.
     fn map(&self, block_nr: LogicalNr) -> Option<&TypesBlock> {
         let map_idx = block_nr.as_u32() / TypesBlock::len_types_g(self.block_size) as u32;
         self.blocks.get(map_idx as usize)
     }
 
+    // Get the blockmap that contains the given block-nr.
     fn map_mut(&mut self, block_nr: LogicalNr) -> Option<&mut TypesBlock> {
         let map_idx = block_nr.as_u32() / TypesBlock::len_types_g(self.block_size) as u32;
         self.blocks.get_mut(map_idx as usize)
@@ -233,15 +237,6 @@ impl<'a> IntoIterator for &'a Types {
 
     fn into_iter(self) -> Self::IntoIter {
         self.blocks.iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut Types {
-    type Item = &'a mut TypesBlock;
-    type IntoIter = std::slice::IterMut<'a, TypesBlock>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.blocks.iter_mut()
     }
 }
 
@@ -314,7 +309,7 @@ impl TypesBlock {
         self.0.set_dirty(true);
     }
 
-    pub fn iter_nr(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> + '_ {
+    pub fn iter_block_type(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> + '_ {
         struct NrIter<'a> {
             idx: usize,
             data: &'a BlockMapType,

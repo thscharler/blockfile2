@@ -42,6 +42,7 @@ impl Physical {
         new_self
     }
 
+    /// Load from file.
     pub fn load(file: &mut File, block_size: usize, block_pnr: PhysicalNr) -> Result<Self, Error> {
         let mut block_0 = PhysicalBlock::new(_INIT_PHYSICAL_NR, block_size);
         block_io::load_raw(file, block_pnr, &mut block_0.0)?;
@@ -60,7 +61,7 @@ impl Physical {
                 break;
             }
 
-            let next_pnr = new_self.map_block_pnr(next)?;
+            let next_pnr = new_self.physical_nr(next)?;
             let mut physical_block = PhysicalBlock::new(next, block_size);
             block_io::load_raw(file, next_pnr, &mut physical_block.0)?;
 
@@ -74,7 +75,10 @@ impl Physical {
         Ok(new_self)
     }
 
-    fn init_free_list(&mut self) {
+    /// Rebuild the free-list.
+    pub fn init_free_list(&mut self) {
+        self.free.clear();
+
         let mut used_pnr = BitSet::new();
 
         for physical_block in &self.blocks {
@@ -106,24 +110,25 @@ impl Physical {
         }
     }
 
+    /// Free a physical block.
     pub fn free_block(&mut self, block_nr: LogicalNr) -> Result<(), Error> {
         let Some(block) = self.map_mut(block_nr) else {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
         };
 
-        let pnr = block.physical(block_nr)?;
-        block.set_physical(block_nr, PhysicalNr(0))?;
+        let pnr = block.physical_nr(block_nr)?;
+        block.set_physical_nr(block_nr, PhysicalNr(0))?;
         self.free.push(pnr);
         Ok(())
     }
 
     /// Maximum physical block.
-    pub fn max_pnr(&self) -> PhysicalNr {
+    pub fn max_physical_nr(&self) -> PhysicalNr {
         self.max
     }
 
     /// Set the physical block.
-    pub fn set_block_pnr(
+    pub fn set_physical_nr(
         &mut self,
         block_nr: LogicalNr,
         block_pnr: PhysicalNr,
@@ -131,17 +136,18 @@ impl Physical {
         let Some(map) = self.map_mut(block_nr) else {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
         };
-        map.set_physical(block_nr, block_pnr)
+        map.set_physical_nr(block_nr, block_pnr)
     }
 
     /// Find the physical block.
-    pub fn map_block_pnr(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
+    pub fn physical_nr(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
         let Some(map) = self.map(block_nr) else {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
         };
-        map.physical(block_nr)
+        map.physical_nr(block_nr)
     }
 
+    /// Add a new blockmap and links it to the maximum one.
     pub fn append_blockmap(&mut self, next_nr: LogicalNr) {
         let last_block = self.blocks.last_mut().expect("last");
         last_block.set_next_nr(next_nr);
@@ -152,6 +158,7 @@ impl Physical {
         self.blocks.push(block);
     }
 
+    /// Get the blockmap with this block-nr.
     pub fn blockmap(&self, block_nr: LogicalNr) -> Result<&PhysicalBlock, Error> {
         let find = self.blocks.iter().find(|v| v.block_nr() == block_nr);
         match find {
@@ -160,6 +167,7 @@ impl Physical {
         }
     }
 
+    /// Get the blockmap with this block-nr.
     pub fn blockmap_mut(&mut self, block_nr: LogicalNr) -> Result<&mut PhysicalBlock, Error> {
         let find = self.blocks.iter_mut().find(|v| v.block_nr() == block_nr);
         match find {
@@ -168,7 +176,7 @@ impl Physical {
         }
     }
 
-    // Iterate all physical blocks. Adds the dirty flag to the result.
+    /// Iterate all physical blocks. Adds the dirty flag to the result.
     pub fn iter_dirty(&self) -> impl Iterator<Item = (LogicalNr, bool)> {
         struct DirtyIter {
             idx: usize,
@@ -197,11 +205,13 @@ impl Physical {
         DirtyIter { idx: 0, blocks }
     }
 
+    // Get the blockmap that contains the given block-nr.
     fn map(&self, block_nr: LogicalNr) -> Option<&PhysicalBlock> {
         let map_idx = block_nr.as_u32() / PhysicalBlock::len_physical_g(self.block_size) as u32;
         self.blocks.get(map_idx as usize)
     }
 
+    // Get the blockmap that contains the given block-nr.
     fn map_mut(&mut self, block_nr: LogicalNr) -> Option<&mut PhysicalBlock> {
         let map_idx = block_nr.as_u32() / PhysicalBlock::len_physical_g(self.block_size) as u32;
         self.blocks.get_mut(map_idx as usize)
@@ -324,7 +334,7 @@ impl PhysicalBlock {
         block_nr >= self.start_nr() && block_nr < self.end_nr()
     }
 
-    pub(super) fn set_physical(
+    pub(super) fn set_physical_nr(
         &mut self,
         block_nr: LogicalNr,
         physical: PhysicalNr,
@@ -339,7 +349,7 @@ impl PhysicalBlock {
         }
     }
 
-    pub fn physical(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
+    pub fn physical_nr(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
         if self.contains(block_nr) {
             let idx = (block_nr - self.start_nr()) as usize;
             Ok(self.data().physical[idx])
