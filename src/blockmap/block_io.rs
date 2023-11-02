@@ -1,17 +1,36 @@
 use crate::blockmap::block::Block;
-use crate::{ConvertIOError, FBErrorKind};
+use crate::FBErrorKind;
 use crate::{Error, PhysicalNr};
+use std::backtrace::Backtrace;
 use std::fs::{File, Metadata};
+use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
+
+pub(crate) fn map_error(err: io::Error, kind: FBErrorKind) -> Error {
+    Error {
+        kind,
+        io: err.kind(),
+        backtrace: Backtrace::capture(),
+    }
+}
+
+pub(crate) fn map_result<T>(err: Result<T, io::Error>, kind: FBErrorKind) -> Result<T, Error> {
+    match err {
+        Ok(v) => Ok(v),
+        Err(e) => Err(map_error(e, kind)),
+    }
+}
 
 // Sync file storage.
 pub(crate) fn sync(file: &mut File) -> Result<(), Error> {
-    file.sync_all().xerr(FBErrorKind::Sync)
+    let result = file.sync_all();
+    map_result(result, FBErrorKind::Sync)
 }
 
 // Metadata
 pub(crate) fn metadata(file: &mut File) -> Result<Metadata, Error> {
-    file.metadata().xerr(FBErrorKind::Metadata)
+    let result = file.metadata();
+    map_result(result, FBErrorKind::Metadata)
 }
 
 // Write a block to storage.
@@ -24,9 +43,11 @@ pub(crate) fn store_raw(
     block: &Block,
 ) -> Result<(), Error> {
     seek_block(file, physical_block, block.block_size())?;
-    file.write_all(block.data.as_ref())
-        .xerr(FBErrorKind::StoreRaw(block.block_nr(), physical_block))?;
-    Ok(())
+    let result = file.write_all(block.data.as_ref());
+    map_result(
+        result,
+        FBErrorKind::StoreRaw(block.block_nr(), physical_block),
+    )
 }
 
 // Read a block from storage.
@@ -39,19 +60,27 @@ pub(crate) fn load_raw(
     block: &mut Block,
 ) -> Result<(), Error> {
     seek_block(file, physical_block, block.block_size())?;
-    file.read_exact(block.data.as_mut())
-        .xerr(FBErrorKind::LoadRaw(block.block_nr(), physical_block))?;
-    Ok(())
+    let result = file.read_exact(block.data.as_mut());
+    map_result(
+        result,
+        FBErrorKind::LoadRaw(block.block_nr(), physical_block),
+    )
 }
 
 // Seek to the block_nr
-fn seek_block(file: &mut File, physical_block: PhysicalNr, block_size: usize) -> Result<(), Error> {
+fn seek_block(
+    file: &mut File,
+    physical_block: PhysicalNr,
+    block_size: usize,
+) -> Result<u64, Error> {
     let seek_pos = (physical_block.as_usize() * block_size) as u64;
-    let file_pos = file
-        .seek(SeekFrom::Start(seek_pos))
-        .xerr(FBErrorKind::SeekBlock(physical_block))?;
-    debug_assert_eq!(file_pos, seek_pos);
-    Ok(())
+    let result = file.seek(SeekFrom::Start(seek_pos));
+    result
+        .or_else(|v| Err(map_error(v, FBErrorKind::SeekBlock(physical_block))))
+        .and_then(|v| {
+            debug_assert_eq!(v, seek_pos);
+            Ok(v)
+        })
 }
 
 // Write a block to storage.
@@ -67,9 +96,8 @@ pub(crate) fn sub_store_raw(
 ) -> Result<(), Error> {
     debug_assert!((offset + block.len()) <= block_size);
     sub_seek_block(file, physical_block, block_size, offset)?;
-    file.write_all(block)
-        .xerr(FBErrorKind::SubStoreRaw(physical_block))?;
-    Ok(())
+    let result = file.write_all(block);
+    map_result(result, FBErrorKind::SubStoreRaw(physical_block))
 }
 
 // Seek to the block_nr
@@ -78,12 +106,14 @@ fn sub_seek_block(
     physical_block: PhysicalNr,
     block_size: usize,
     offset: usize,
-) -> Result<(), Error> {
+) -> Result<u64, Error> {
     debug_assert!(offset <= block_size);
     let seek_pos = (physical_block.as_usize() * block_size + offset) as u64;
-    let file_pos = file
-        .seek(SeekFrom::Start(seek_pos))
-        .xerr(FBErrorKind::SubSeekBlock(physical_block))?;
-    debug_assert_eq!(file_pos, seek_pos);
-    Ok(())
+    let result = file.seek(SeekFrom::Start(seek_pos));
+    result
+        .or_else(|e| Err(map_error(e, FBErrorKind::SubSeekBlock(physical_block))))
+        .and_then(|v| {
+            debug_assert_eq!(v, seek_pos);
+            Ok(v)
+        })
 }

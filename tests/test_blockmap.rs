@@ -13,7 +13,7 @@ fn test_init() {
     assert_eq!(alloc.header().high_types(), PhysicalNr(0));
     assert_eq!(alloc.header().low_physical(), PhysicalNr(0));
     assert_eq!(alloc.header().high_physical(), PhysicalNr(0));
-    assert_eq!(alloc.header().state(), State::Low);
+    assert_eq!(alloc.header().state(), State::High);
 
     for t in alloc.iter_types() {
         assert_eq!(t.block_nr(), LogicalNr(1));
@@ -31,7 +31,7 @@ fn test_init() {
         assert_eq!(p.len_physical(), 30);
     }
 
-    // dbg!(alloc);
+    dbg!(alloc);
 }
 
 #[test]
@@ -44,10 +44,10 @@ fn test_1() -> Result<(), Error> {
     let mut f = File::open("tmp/test1.bin").expect("file");
     let alloc = Alloc::load(&mut f, BLOCK_SIZE)?;
 
-    assert_eq!(alloc.header().low_types(), PhysicalNr(0));
-    assert_eq!(alloc.header().low_physical(), PhysicalNr(0));
-    assert_eq!(alloc.header().high_types(), PhysicalNr(1));
-    assert_eq!(alloc.header().high_physical(), PhysicalNr(2));
+    assert_eq!(alloc.header().low_types(), PhysicalNr(1));
+    assert_eq!(alloc.header().low_physical(), PhysicalNr(2));
+    assert_eq!(alloc.header().high_types(), PhysicalNr(0));
+    assert_eq!(alloc.header().high_physical(), PhysicalNr(0));
 
     assert_eq!(alloc.block_type(LogicalNr(0))?, BlockType::Header);
     assert_eq!(alloc.block_type(LogicalNr(1))?, BlockType::Types);

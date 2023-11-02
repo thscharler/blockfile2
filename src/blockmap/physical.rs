@@ -8,14 +8,14 @@ use std::fs::File;
 use std::mem::{align_of, size_of};
 use std::ptr;
 
-pub(super) struct Physical {
+pub(crate) struct Physical {
     block_size: usize,
     blocks: Vec<PhysicalBlock>,
     max: PhysicalNr,
     free: Vec<PhysicalNr>,
 }
 
-pub struct PhysicalBlock(pub(super) Block);
+pub struct PhysicalBlock(pub(crate) Block);
 
 #[repr(C)]
 #[derive(Debug)]
@@ -123,6 +123,7 @@ impl Physical {
     }
 
     /// Maximum physical block.
+    #[allow(dead_code)]
     pub fn max_physical_nr(&self) -> PhysicalNr {
         self.max
     }
@@ -148,14 +149,18 @@ impl Physical {
     }
 
     /// Add a new blockmap and links it to the maximum one.
-    pub fn append_blockmap(&mut self, next_nr: LogicalNr) {
-        let last_block = self.blocks.last_mut().expect("last");
+    pub fn append_blockmap(&mut self, next_nr: LogicalNr) -> Result<(), Error> {
+        let Some(last_block) = self.blocks.last_mut() else {
+            return Err(Error::err(FBErrorKind::NoBlockMap));
+        };
         last_block.set_next_nr(next_nr);
         let start_nr = last_block.end_nr();
 
         let mut block = PhysicalBlock::new(next_nr, self.block_size);
         block.set_start_nr(start_nr);
         self.blocks.push(block);
+
+        Ok(())
     }
 
     /// Get the blockmap with this block-nr.

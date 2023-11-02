@@ -1,4 +1,6 @@
+use crate::UserBlockType;
 use std::fmt::{Debug, Formatter};
+use std::mem::align_of;
 
 #[non_exhaustive]
 #[repr(u32)]
@@ -27,6 +29,21 @@ pub enum BlockType {
     User14 = 29,
     User15 = 30,
     User16 = 31,
+}
+
+impl UserBlockType for BlockType {
+    fn block_type(self) -> BlockType {
+        self
+    }
+
+    fn user_type(block_type: BlockType) -> Self {
+        block_type
+    }
+
+    fn align(self) -> usize {
+        // basic data blocks are byte-arrays.
+        align_of::<[u8; 0]>()
+    }
 }
 
 impl Debug for BlockType {

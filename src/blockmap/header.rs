@@ -40,7 +40,8 @@ impl HeaderBlock {
             &mut *(s as *mut u8 as *mut BlockMapHeader)
         };
 
-        header_0.state = State::Low;
+        // start high so the initial store goes to low.
+        header_0.state = State::High;
         header_0.block_size = block_size as u32;
         header_0.low_types = PhysicalNr(0);
         header_0.low_physical = PhysicalNr(0);

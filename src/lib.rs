@@ -4,9 +4,24 @@ use std::io;
 use std::ops::{Add, AddAssign, Sub};
 
 mod blockmap;
+mod fileblocks;
 
 pub use crate::blockmap::{Alloc, Block, BlockType, HeaderBlock, PhysicalBlock, State, TypesBlock};
+pub use crate::fileblocks::{BasicFileBlocks, FileBlocks};
 
+/// User data blocks.
+pub trait UserBlockType: Copy {
+    /// User block-type to block-type.
+    fn block_type(self) -> BlockType;
+
+    /// Block-type to user block-type.
+    fn user_type(block_type: BlockType) -> Self;
+
+    /// Memory alignment for a user block-type.
+    fn align(self) -> usize;
+}
+
+/// Newtype for physical block-nr.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PhysicalNr(pub u32);
@@ -55,6 +70,7 @@ impl Sub for PhysicalNr {
     }
 }
 
+/// Newtype for logical block-nr.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LogicalNr(pub u32);
@@ -103,6 +119,7 @@ impl Sub for LogicalNr {
     }
 }
 
+/// Error types.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum FBErrorKind {
@@ -120,17 +137,31 @@ pub enum FBErrorKind {
     Sync,
     /// Metadata failed. IO error.
     Metadata,
+    /// Cannot create the file.
+    Create,
+    /// Cannot open the file.
+    Open,
 
-    ///
+    /// Block has not been allocated.
+    NotAllocated(LogicalNr),
+    /// Accessing internal blocks denied.
+    AccessDenied(LogicalNr),
+    /// Severe internal error.
+    NoFreeBlocks,
+    /// Severe internal error.
+    NoBlockMap,
+
+    /// Not a known block-nr.
     InvalidBlock(LogicalNr),
-    ///
+    /// Loading a file with a different block-size.
     InvalidBlockSize(usize),
-    ///
+    /// Severe load error. Block-data is garbage?
     NoBlockType(LogicalNr),
-    ///
+    /// Severe load error. Block-data is garbage?
     InvalidBlockType(LogicalNr, BlockType),
 }
 
+/// Error.
 pub struct Error {
     pub kind: FBErrorKind,
     pub io: io::ErrorKind,
@@ -161,25 +192,5 @@ impl Debug for Error {
         s.finish()?;
         write!(f, "{:#?}", self.backtrace)?;
         Ok(())
-    }
-}
-
-pub(crate) trait ConvertIOError {
-    type Result;
-    fn xerr(self, kind: FBErrorKind) -> Self::Result;
-}
-
-impl<T> ConvertIOError for Result<T, io::Error> {
-    type Result = Result<T, Error>;
-
-    fn xerr(self, kind: FBErrorKind) -> Self::Result {
-        match self {
-            Ok(v) => Ok(v),
-            Err(e) => Err(Error {
-                kind,
-                io: e.kind(),
-                backtrace: Backtrace::capture(),
-            }),
-        }
     }
 }

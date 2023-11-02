@@ -1,19 +1,21 @@
 use crate::blockmap::block::Block;
 use crate::blockmap::physical::Physical;
 use crate::blockmap::{block_io, BlockType, _INIT_HEADER_NR, _INIT_PHYSICAL_NR, _INIT_TYPES_NR};
-use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr};
+use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
+use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ptr;
 
-pub(super) struct Types {
+/// Manage block-types.
+pub(crate) struct Types {
     block_size: usize,
     blocks: Vec<TypesBlock>,
     free: Vec<LogicalNr>,
 }
 
-pub struct TypesBlock(pub(super) Block);
+pub struct TypesBlock(pub(crate) Block);
 
 #[repr(C)]
 struct BlockMapType {
@@ -142,6 +144,7 @@ impl Types {
     }
 
     /// Returns the block-map with the given block-nr.
+    #[allow(dead_code)]
     pub fn blockmap(&self, block_nr: LogicalNr) -> Result<&TypesBlock, Error> {
         let find = self.blocks.iter().find(|v| v.block_nr() == block_nr);
         match find {
@@ -397,10 +400,56 @@ impl TypesBlock {
 
 impl Debug for Types {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}",
+            UserTypes::<BlockType>(self, PhantomData::default())
+        )
+    }
+}
+
+impl Debug for TypesBlock {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}",
+            UserTypesBlock::<BlockType>(self, PhantomData::default())
+        )
+    }
+}
+
+pub(crate) struct UserTypes<'a, U>(pub &'a Types, pub PhantomData<U>);
+pub(crate) struct UserTypesBlock<'a, U>(&'a TypesBlock, PhantomData<U>);
+
+impl<'a, U> Debug for UserTypes<'a, U>
+where
+    U: UserBlockType + Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("Types");
-        s.field("blocks", &self.blocks);
-        s.field("free", &RefFree(self.free.as_ref()));
+        s.field(
+            "blocks",
+            &RefTypes::<U>(&self.0.blocks, PhantomData::default()),
+        );
+        s.field("free", &RefFree(self.0.free.as_ref()));
         s.finish()?;
+
+        struct RefTypes<'a, U>(&'a [TypesBlock], PhantomData<U>);
+        impl<'a, U> Debug for RefTypes<'a, U>
+        where
+            U: UserBlockType + Debug,
+        {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                for block in self.0 {
+                    writeln!(
+                        f,
+                        "{:?}",
+                        UserTypesBlock::<U>(block, PhantomData::default())
+                    )?;
+                }
+                Ok(())
+            }
+        }
 
         struct RefFree<'a>(&'a [LogicalNr]);
         impl<'a> Debug for RefFree<'a> {
@@ -423,27 +472,41 @@ impl Debug for Types {
     }
 }
 
-impl Debug for TypesBlock {
+impl<'a, U> Debug for UserTypesBlock<'a, U>
+where
+    U: UserBlockType + Debug,
+{
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("TypesBlock");
-        s.field("", &format_args!("{}", self.block_nr()));
+        s.field("", &format_args!("{}", self.0.block_nr()));
         s.field(
             "covers",
-            &format_args!("{:?}-{:?}", self.start_nr(), self.end_nr()),
+            &format_args!("{:?}-{:?}", self.0.start_nr(), self.0.end_nr()),
         );
-        s.field("next", &format_args!("[{}]", self.next_nr()));
+        s.field("next", &format_args!("[{}]", self.0.next_nr()));
         s.field(
             "flags",
             &format_args!(
-                "gen-{} {} {}",
+                "gen-{} {}",
                 self.0.generation(),
                 if self.0.is_dirty() { "dirty" } else { "" },
-                if self.0.is_discard() { "discard" } else { "" },
             ),
         );
+        s.field(
+            "types",
+            &RefTypes::<U>(
+                &self.0.data().block_type,
+                self.0.start_nr().as_usize(),
+                PhantomData::default(),
+            ),
+        );
+        s.finish()?;
 
-        struct RefTypes<'a>(&'a [BlockType], usize);
-        impl<'a> Debug for RefTypes<'a> {
+        struct RefTypes<'a, U>(&'a [BlockType], usize, PhantomData<U>);
+        impl<'a, U> Debug for RefTypes<'a, U>
+        where
+            U: UserBlockType + Debug,
+        {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
                 for r in 0..(self.0.len() + 16) / 16 {
                     writeln!(f)?;
@@ -452,7 +515,7 @@ impl Debug for TypesBlock {
                         let i = r * 16 + c;
 
                         if i < self.0.len() {
-                            write!(f, "{:4?} ", self.0[i])?;
+                            write!(f, "{:4?} ", U::user_type(self.0[i]))?;
                         }
                     }
                 }
@@ -460,11 +523,6 @@ impl Debug for TypesBlock {
             }
         }
 
-        s.field(
-            "types",
-            &RefTypes(&self.data().block_type, self.start_nr().as_usize()),
-        );
-        s.finish()?;
         Ok(())
     }
 }
