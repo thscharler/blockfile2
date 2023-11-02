@@ -546,7 +546,7 @@ where
                         let i = r * 16 + c;
 
                         if i < self.0.len() {
-                            write!(f, "{:4?} ", U::user_type(self.0[i]))?;
+                            write!(f, "{:4?} ", user_type_string::<U>(self.0[i]))?;
                         }
                     }
                 }
@@ -555,5 +555,15 @@ where
         }
 
         Ok(())
+    }
+}
+
+fn user_type_string<U>(block_type: BlockType) -> String
+where
+    U: UserBlockType + Debug,
+{
+    match U::user_type(block_type) {
+        Some(v) => format!("{:?}", v).to_string(),
+        None => format!("{:?}", block_type).to_string(),
     }
 }

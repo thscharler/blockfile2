@@ -1,5 +1,5 @@
 use crate::UserBlockType;
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::mem::align_of;
 
 /// Available blocktypes.
@@ -50,6 +50,12 @@ impl UserBlockType for BlockType {
     }
 }
 
+impl Display for BlockType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 impl Debug for BlockType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let t = match self {
@@ -78,5 +84,37 @@ impl Debug for BlockType {
             BlockType::User16 => "U16",
         };
         write!(f, "{}", t)
+    }
+}
+
+impl TryFrom<u32> for BlockType {
+    type Error = u32;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(BlockType::NotAllocated),
+            1 => Ok(BlockType::Free),
+            2 => Ok(BlockType::Header),
+            3 => Ok(BlockType::Types),
+            4 => Ok(BlockType::Physical),
+
+            16 => Ok(BlockType::User1),
+            17 => Ok(BlockType::User2),
+            18 => Ok(BlockType::User3),
+            19 => Ok(BlockType::User4),
+            20 => Ok(BlockType::User5),
+            21 => Ok(BlockType::User6),
+            22 => Ok(BlockType::User7),
+            23 => Ok(BlockType::User8),
+            24 => Ok(BlockType::User9),
+            25 => Ok(BlockType::User10),
+            26 => Ok(BlockType::User11),
+            27 => Ok(BlockType::User12),
+            28 => Ok(BlockType::User13),
+            29 => Ok(BlockType::User14),
+            30 => Ok(BlockType::User15),
+            31 => Ok(BlockType::User16),
+
+            _ => Err(value),
+        }
     }
 }
