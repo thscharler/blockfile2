@@ -244,6 +244,7 @@ impl Alloc {
     }
 
     /// Stores a compact copy. The copy contains no unused blocks.
+    #[allow(dead_code)]
     pub fn compact_to(&mut self, _file: &mut File) -> Result<(), Error> {
         unimplemented!()
     }
@@ -467,6 +468,7 @@ impl Alloc {
     }
 
     /// Get the physical block for a block-nr. Returns 0 if no such page has been assigned yet.
+    #[allow(dead_code)]
     pub fn physical_nr(&self, logical: LogicalNr) -> Result<PhysicalNr, Error> {
         self.physical.physical_nr(logical)
     }

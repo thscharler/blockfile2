@@ -144,12 +144,6 @@ impl PartialOrd<u32> for LogicalNr {
     }
 }
 
-impl From<u32> for LogicalNr {
-    fn from(value: u32) -> Self {
-        LogicalNr(value)
-    }
-}
-
 /// Error types.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]

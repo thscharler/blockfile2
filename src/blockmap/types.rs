@@ -6,7 +6,6 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::ops::Range;
 use std::ptr;
 
 /// Manages block-types.

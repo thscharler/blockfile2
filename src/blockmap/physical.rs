@@ -164,6 +164,7 @@ impl Physical {
     }
 
     /// Get the blockmap with this block-nr.
+    #[allow(dead_code)]
     pub fn blockmap(&self, block_nr: LogicalNr) -> Result<&PhysicalBlock, Error> {
         let find = self.blocks.iter().find(|v| v.block_nr() == block_nr);
         match find {
