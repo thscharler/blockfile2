@@ -118,6 +118,8 @@ pub enum FBErrorKind {
     SubStoreRaw(PhysicalNr),
     /// Sync failed. IO error.
     Sync,
+    /// Metadata failed. IO error.
+    Metadata,
 
     ///
     InvalidBlock(LogicalNr),

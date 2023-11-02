@@ -13,7 +13,7 @@ pub(super) struct Types {
     free: Vec<LogicalNr>,
 }
 
-pub struct TypesBlock(Block);
+pub struct TypesBlock(pub(super) Block);
 
 #[repr(C)]
 struct BlockMapType {
@@ -24,7 +24,8 @@ struct BlockMapType {
 
 impl Types {
     pub fn init(block_size: usize) -> Self {
-        let block_0 = TypesBlock::init(block_size);
+        let mut block_0 = TypesBlock::init(block_size);
+        block_0.set_dirty(true);
 
         let mut new_self = Self {
             block_size,
@@ -55,17 +56,17 @@ impl Types {
         };
 
         loop {
-            let next_p = physical.physical_block(next)?;
+            if next.as_u32() == 0 {
+                break;
+            }
+
+            let next_p = physical.map_block_pnr(next)?;
             let mut types = TypesBlock::new(next, block_size);
             block_io::load_raw(file, next_p, &mut types.0)?;
 
             next = types.next_nr();
 
             new_self.blocks.push(types);
-
-            if next.as_u32() == 0 {
-                break;
-            }
         }
 
         new_self.init_free_list();
@@ -130,6 +131,51 @@ impl Types {
         map.block_type(block_nr)
     }
 
+    pub fn blockmap(&self, block_nr: LogicalNr) -> Result<&TypesBlock, Error> {
+        let find = self.blocks.iter().find(|v| v.block_nr() == block_nr);
+        match find {
+            Some(v) => Ok(v),
+            None => Err(Error::err(FBErrorKind::InvalidBlock(block_nr))),
+        }
+    }
+
+    pub fn blockmap_mut(&mut self, block_nr: LogicalNr) -> Result<&mut TypesBlock, Error> {
+        let find = self.blocks.iter_mut().find(|v| v.block_nr() == block_nr);
+        match find {
+            Some(v) => Ok(v),
+            None => Err(Error::err(FBErrorKind::InvalidBlock(block_nr))),
+        }
+    }
+
+    // Iterate all physical blocks. Adds the dirty flag to the result.
+    pub fn iter_dirty(&self) -> impl Iterator<Item = (LogicalNr, bool)> {
+        struct DirtyIter {
+            idx: usize,
+            blocks: Vec<(LogicalNr, bool)>,
+        }
+        impl Iterator for DirtyIter {
+            type Item = (LogicalNr, bool);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.idx >= self.blocks.len() {
+                    None
+                } else {
+                    let next = self.blocks[self.idx];
+                    self.idx += 1;
+                    Some(next)
+                }
+            }
+        }
+
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|v| (v.block_nr(), v.is_dirty()))
+            .collect();
+
+        DirtyIter { idx: 0, blocks }
+    }
+
     pub fn iter_nr(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> + '_ {
         struct ItNr<'a> {
             block_idx: usize,
@@ -190,6 +236,15 @@ impl<'a> IntoIterator for &'a Types {
     }
 }
 
+impl<'a> IntoIterator for &'a mut Types {
+    type Item = &'a mut TypesBlock;
+    type IntoIter = std::slice::IterMut<'a, TypesBlock>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.blocks.iter_mut()
+    }
+}
+
 impl TypesBlock {
     pub(super) fn init(block_size: usize) -> Self {
         let mut block_0 = Block::new(_INIT_TYPES_NR, block_size, 4, BlockType::Types);
@@ -223,14 +278,6 @@ impl TypesBlock {
 
     pub fn set_dirty(&mut self, dirty: bool) {
         self.0.set_dirty(dirty);
-    }
-
-    pub fn is_discard(&self) -> bool {
-        self.0.is_discard()
-    }
-
-    pub fn set_discard(&mut self, discard: bool) {
-        self.0.set_discard(discard)
     }
 
     pub fn generation(&self) -> u32 {

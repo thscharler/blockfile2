@@ -1,4 +1,5 @@
-use blockfile2::{Alloc, LogicalNr, PhysicalNr, State};
+use blockfile2::{Alloc, Error, LogicalNr, PhysicalNr, State};
+use std::fs::File;
 
 const BLOCK_SIZE: usize = 128;
 
@@ -29,4 +30,18 @@ fn test_init() {
     }
 
     dbg!(alloc);
+}
+
+#[test]
+fn test_1() -> Result<(), Error> {
+    let mut f = File::create("tmp/test1.bin").expect("file");
+    let mut alloc = Alloc::init(BLOCK_SIZE);
+    alloc.store(&mut f)?;
+    drop(f);
+
+    let mut f = File::open("tmp/test1.bin").expect("file");
+    let alloc = Alloc::load(&mut f, BLOCK_SIZE)?;
+    dbg!(alloc);
+
+    Ok(())
 }

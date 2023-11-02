@@ -47,19 +47,72 @@ impl Alloc {
     }
 
     pub fn store(&mut self, file: &mut File) -> Result<(), Error> {
-        // self.physical.
-        //
-        //
-        //
-        // for block in &self.physical {
-        //
-        // }
-        todo!()
+        if block_io::metadata(file)?.len() == 0 {
+            // Write default header.
+            let default = HeaderBlock::init(self.block_size);
+            block_io::store_raw(file, PhysicalNr(0), &default.0)?;
+        }
+
+        for (block_nr, is_dirty) in self.types.iter_dirty() {
+            let block_pnr = self.physical.map_block_pnr(block_nr)?;
+
+            if is_dirty || block_pnr.as_u32() == 0 {
+                let new_pnr = self.physical.pop_free();
+                self.physical.set_block_pnr(block_nr, new_pnr)?;
+
+                let block = self.types.blockmap_mut(block_nr)?;
+                block_io::store_raw(file, new_pnr, &block.0)?;
+                block.set_dirty(false);
+            }
+        }
+
+        // write user blocks before any physical mapping.
+
+        // assign physical before writing any.
+        for (block_nr, is_dirty) in self.physical.iter_dirty() {
+            let block_pnr = self.physical.map_block_pnr(block_nr)?;
+            if is_dirty || block_pnr.as_u32() == 0 {
+                let new_pnr = self.physical.pop_free();
+                self.physical.set_block_pnr(block_nr, new_pnr)?;
+                let block = self.physical.blockmap_mut(block_nr)?;
+                block.set_dirty(true);
+            }
+        }
+
+        for (block_nr, is_dirty) in self.physical.iter_dirty() {
+            let block_pnr = self.physical.map_block_pnr(block_nr)?;
+            debug_assert_ne!(block_pnr.as_u32(), 0);
+
+            if is_dirty {
+                let block = self.physical.blockmap_mut(block_nr)?;
+                block_io::store_raw(file, block_pnr, &block.0)?;
+                block.set_dirty(false);
+            }
+        }
+
+        // write root blocks
+        let block_1_pnr = self.physical.map_block_pnr(_INIT_TYPES_NR)?;
+        let block_2_pnr = self.physical.map_block_pnr(_INIT_PHYSICAL_NR)?;
+
+        match self.header.state() {
+            State::Low => {
+                self.header.store_high_types(file, block_1_pnr)?;
+                self.header.store_high_physical(file, block_2_pnr)?;
+                self.header.store_state(file, State::High)?;
+            }
+            State::High => {
+                self.header.store_low_types(file, block_1_pnr)?;
+                self.header.store_low_physical(file, block_2_pnr)?;
+                self.header.store_state(file, State::Low)?;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn load(file: &mut File, block_size: usize) -> Result<Self, Error> {
-        let mut header = HeaderBlock::new(_INIT_HEADER_NR, block_size);
-        block_io::load_raw(file, PhysicalNr(0), header.block_mut())?;
+        let mut header = HeaderBlock::new(block_size);
+        block_io::load_raw(file, PhysicalNr(0), &mut header.0)?;
 
         let physical_block = match header.state() {
             State::Low => header.low_physical(),
@@ -192,6 +245,6 @@ impl Alloc {
     }
 
     fn physical_block(&self, logical: LogicalNr) -> Result<PhysicalNr, Error> {
-        self.physical.physical_block(logical)
+        self.physical.map_block_pnr(logical)
     }
 }

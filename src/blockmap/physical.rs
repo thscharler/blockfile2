@@ -15,7 +15,7 @@ pub(super) struct Physical {
     free: Vec<PhysicalNr>,
 }
 
-pub struct PhysicalBlock(Block);
+pub struct PhysicalBlock(pub(super) Block);
 
 #[repr(C)]
 #[derive(Debug)]
@@ -27,7 +27,8 @@ struct BlockMapPhysical {
 
 impl Physical {
     pub fn init(block_size: usize) -> Self {
-        let block_0 = PhysicalBlock::init(block_size);
+        let mut block_0 = PhysicalBlock::init(block_size);
+        block_0.set_dirty(true);
 
         let mut new_self = Self {
             block_size,
@@ -42,30 +43,30 @@ impl Physical {
     }
 
     pub fn load(file: &mut File, block_size: usize, block_pnr: PhysicalNr) -> Result<Self, Error> {
-        let mut physical_block_0 = PhysicalBlock::new(_INIT_PHYSICAL_NR, block_size);
-        block_io::load_raw(file, block_pnr, &mut physical_block_0.0)?;
+        let mut block_0 = PhysicalBlock::new(_INIT_PHYSICAL_NR, block_size);
+        block_io::load_raw(file, block_pnr, &mut block_0.0)?;
 
-        let mut next = physical_block_0.next_nr();
+        let mut next = block_0.next_nr();
 
         let mut new_self = Self {
             block_size,
-            blocks: vec![physical_block_0],
+            blocks: vec![block_0],
             max: PhysicalNr(0),
             free: vec![],
         };
 
         loop {
-            let next_pnr = new_self.physical_block(next)?;
+            if next.as_u32() == 0 {
+                break;
+            }
+
+            let next_pnr = new_self.map_block_pnr(next)?;
             let mut physical_block = PhysicalBlock::new(next, block_size);
             block_io::load_raw(file, next_pnr, &mut physical_block.0)?;
 
             next = physical_block.next_nr();
 
             new_self.blocks.push(physical_block);
-
-            if next.as_u32() == 0 {
-                break;
-            }
         }
 
         new_self.init_free_list();
@@ -87,7 +88,7 @@ impl Physical {
 
         // find free blocks.
         for i in 0..used_pnr.len() {
-            if !used_pnr.contains(i) {
+            if i != 0 && !used_pnr.contains(i) {
                 self.free.push(PhysicalNr(i as u32));
             } else {
                 self.max = max(self.max, PhysicalNr(i as u32));
@@ -105,16 +106,6 @@ impl Physical {
         }
     }
 
-    pub fn append_blockmap(&mut self, next_nr: LogicalNr) {
-        let last_block = self.blocks.last_mut().expect("last");
-        last_block.set_next_nr(next_nr);
-
-        let mut block = PhysicalBlock::new(next_nr, self.block_size);
-        let start_nr = self.max_nr();
-        block.set_start_nr(start_nr);
-        self.blocks.push(block);
-    }
-
     pub fn free_block(&mut self, block_nr: LogicalNr) -> Result<(), Error> {
         let Some(block) = self.map_mut(block_nr) else {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
@@ -126,23 +117,84 @@ impl Physical {
         Ok(())
     }
 
-    /// Maximum currently adressable logical block.
-    fn max_nr(&self) -> LogicalNr {
-        let block = self.blocks.last().expect("last");
-        block.end_nr()
-    }
-
     /// Maximum physical block.
-    pub fn max_physical(&self) -> PhysicalNr {
+    pub fn max_pnr(&self) -> PhysicalNr {
         self.max
     }
 
+    /// Set the physical block.
+    pub fn set_block_pnr(
+        &mut self,
+        block_nr: LogicalNr,
+        block_pnr: PhysicalNr,
+    ) -> Result<(), Error> {
+        let Some(map) = self.map_mut(block_nr) else {
+            return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
+        };
+        map.set_physical(block_nr, block_pnr)
+    }
+
     /// Find the physical block.
-    pub fn physical_block(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
+    pub fn map_block_pnr(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
         let Some(map) = self.map(block_nr) else {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
         };
         map.physical(block_nr)
+    }
+
+    pub fn append_blockmap(&mut self, next_nr: LogicalNr) {
+        let last_block = self.blocks.last_mut().expect("last");
+        last_block.set_next_nr(next_nr);
+        let start_nr = last_block.end_nr();
+
+        let mut block = PhysicalBlock::new(next_nr, self.block_size);
+        block.set_start_nr(start_nr);
+        self.blocks.push(block);
+    }
+
+    pub fn blockmap(&self, block_nr: LogicalNr) -> Result<&PhysicalBlock, Error> {
+        let find = self.blocks.iter().find(|v| v.block_nr() == block_nr);
+        match find {
+            Some(v) => Ok(v),
+            None => Err(Error::err(FBErrorKind::InvalidBlock(block_nr))),
+        }
+    }
+
+    pub fn blockmap_mut(&mut self, block_nr: LogicalNr) -> Result<&mut PhysicalBlock, Error> {
+        let find = self.blocks.iter_mut().find(|v| v.block_nr() == block_nr);
+        match find {
+            Some(v) => Ok(v),
+            None => Err(Error::err(FBErrorKind::InvalidBlock(block_nr))),
+        }
+    }
+
+    // Iterate all physical blocks. Adds the dirty flag to the result.
+    pub fn iter_dirty(&self) -> impl Iterator<Item = (LogicalNr, bool)> {
+        struct DirtyIter {
+            idx: usize,
+            blocks: Vec<(LogicalNr, bool)>,
+        }
+        impl Iterator for DirtyIter {
+            type Item = (LogicalNr, bool);
+
+            fn next(&mut self) -> Option<Self::Item> {
+                if self.idx >= self.blocks.len() {
+                    None
+                } else {
+                    let next = self.blocks[self.idx];
+                    self.idx += 1;
+                    Some(next)
+                }
+            }
+        }
+
+        let blocks = self
+            .blocks
+            .iter()
+            .map(|v| (v.block_nr(), v.is_dirty()))
+            .collect();
+
+        DirtyIter { idx: 0, blocks }
     }
 
     fn map(&self, block_nr: LogicalNr) -> Option<&PhysicalBlock> {
@@ -198,14 +250,6 @@ impl PhysicalBlock {
 
     pub fn set_dirty(&mut self, dirty: bool) {
         self.0.set_dirty(dirty);
-    }
-
-    pub fn is_discard(&self) -> bool {
-        self.0.is_discard()
-    }
-
-    pub fn set_discard(&mut self, discard: bool) {
-        self.0.set_discard(discard)
     }
 
     pub fn generation(&self) -> u32 {

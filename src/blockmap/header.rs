@@ -5,7 +5,7 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::mem::{align_of, size_of};
 
-pub struct HeaderBlock(Block);
+pub struct HeaderBlock(pub(super) Block);
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,7 +26,7 @@ struct BlockMapHeader {
 }
 
 impl HeaderBlock {
-    pub fn init(block_size: usize) -> Self {
+    pub(super) fn init(block_size: usize) -> Self {
         let mut block_0 = Block::new(
             _INIT_HEADER_NR,
             block_size,
@@ -50,21 +50,13 @@ impl HeaderBlock {
         Self(block_0)
     }
 
-    pub fn new(block_nr: LogicalNr, block_size: usize) -> Self {
+    pub(super) fn new(block_size: usize) -> Self {
         Self(Block::new(
-            block_nr,
+            _INIT_HEADER_NR,
             block_size,
             align_of::<BlockMapHeader>(),
             BlockType::Header,
         ))
-    }
-
-    pub fn block(&self) -> &Block {
-        &self.0
-    }
-
-    pub(super) fn block_mut(&mut self) -> &mut Block {
-        &mut self.0
     }
 
     pub fn block_nr(&self) -> LogicalNr {
@@ -77,16 +69,11 @@ impl HeaderBlock {
     const OFFSET_HIGH_TYPES: usize = 16;
     const OFFSET_HIGH_PHYSICAL: usize = 20;
 
-    pub(super) fn store_state(
-        &mut self,
-        file: &mut File,
-        physical_block: PhysicalNr,
-        state: State,
-    ) -> Result<(), Error> {
+    pub(super) fn store_state(&mut self, file: &mut File, state: State) -> Result<(), Error> {
         let state_bytes = (state as u32).to_ne_bytes();
         block_io::sub_store_raw(
             file,
-            physical_block,
+            PhysicalNr(0),
             self.0.block_size(),
             Self::OFFSET_STATE,
             state_bytes.as_ref(),
@@ -102,13 +89,12 @@ impl HeaderBlock {
     pub(super) fn store_low_types(
         &mut self,
         file: &mut File,
-        physical_block: PhysicalNr,
         low_types: PhysicalNr,
     ) -> Result<(), Error> {
         let low_types_bytes = low_types.as_u32().to_ne_bytes();
         block_io::sub_store_raw(
             file,
-            physical_block,
+            PhysicalNr(0),
             self.0.block_size(),
             Self::OFFSET_LOW_TYPES,
             low_types_bytes.as_ref(),
@@ -124,13 +110,12 @@ impl HeaderBlock {
     pub(super) fn store_low_physical(
         &mut self,
         file: &mut File,
-        physical_block: PhysicalNr,
         low_physical: PhysicalNr,
     ) -> Result<(), Error> {
         let low_physical_bytes = low_physical.as_u32().to_ne_bytes();
         block_io::sub_store_raw(
             file,
-            physical_block,
+            PhysicalNr(0),
             self.0.block_size(),
             Self::OFFSET_LOW_PHYSICAL,
             low_physical_bytes.as_ref(),
@@ -146,13 +131,12 @@ impl HeaderBlock {
     pub(super) fn store_high_types(
         &mut self,
         file: &mut File,
-        physical_block: PhysicalNr,
         high_types: PhysicalNr,
     ) -> Result<(), Error> {
         let high_types_bytes = high_types.as_u32().to_ne_bytes();
         block_io::sub_store_raw(
             file,
-            physical_block,
+            PhysicalNr(0),
             self.0.block_size(),
             Self::OFFSET_HIGH_TYPES,
             high_types_bytes.as_ref(),
@@ -168,13 +152,12 @@ impl HeaderBlock {
     pub(super) fn store_high_physical(
         &mut self,
         file: &mut File,
-        physical_block: PhysicalNr,
         high_physical: PhysicalNr,
     ) -> Result<(), Error> {
         let high_physical_bytes = high_physical.as_u32().to_ne_bytes();
         block_io::sub_store_raw(
             file,
-            physical_block,
+            PhysicalNr(0),
             self.0.block_size(),
             Self::OFFSET_HIGH_PHYSICAL,
             high_physical_bytes.as_ref(),

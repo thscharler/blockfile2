@@ -1,12 +1,17 @@
 use crate::blockmap::block::Block;
 use crate::{ConvertIOError, FBErrorKind};
 use crate::{Error, PhysicalNr};
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom, Write};
 
 // Sync file storage.
 pub(crate) fn sync(file: &mut File) -> Result<(), Error> {
     file.sync_all().xerr(FBErrorKind::Sync)
+}
+
+// Metadata
+pub(crate) fn metadata(file: &mut File) -> Result<Metadata, Error> {
+    file.metadata().xerr(FBErrorKind::Metadata)
 }
 
 // Write a block to storage.
