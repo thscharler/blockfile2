@@ -176,7 +176,7 @@ pub enum FBErrorKind {
     /// Severe internal error.
     NoBlockMap,
     /// No mapping to a user block-type exists.
-    NoUserBlockType,
+    NoUserBlockType(BlockType),
 
     /// Not a known block-nr.
     InvalidBlock(LogicalNr),

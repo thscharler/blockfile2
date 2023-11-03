@@ -132,7 +132,7 @@ where
     pub fn block_type(&self, block_nr: LogicalNr) -> Result<U, Error> {
         match self.alloc.block_type(block_nr) {
             Ok(v) => match U::user_type(v) {
-                None => Err(Error::err(FBErrorKind::NoUserBlockType)),
+                None => Err(Error::err(FBErrorKind::NoUserBlockType(v))),
                 Some(v) => Ok(v),
             },
             Err(e) => Err(e),
@@ -179,7 +179,7 @@ where
     pub fn get(&mut self, block_nr: LogicalNr) -> Result<&Block, Error> {
         let block_type = self.alloc.block_type(block_nr)?;
         let Some(user_block_type) = U::user_type(block_type) else {
-            return Err(Error::err(FBErrorKind::NoUserBlockType));
+            return Err(Error::err(FBErrorKind::NoUserBlockType(block_type)));
         };
         let align = U::align(user_block_type);
 
@@ -190,7 +190,7 @@ where
     pub fn get_mut(&mut self, block_nr: LogicalNr) -> Result<&mut Block, Error> {
         let block_type = self.alloc.block_type(block_nr)?;
         let Some(user_block_type) = U::user_type(block_type) else {
-            return Err(Error::err(FBErrorKind::NoUserBlockType));
+            return Err(Error::err(FBErrorKind::NoUserBlockType(block_type)));
         };
         let align = U::align(user_block_type);
 

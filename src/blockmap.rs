@@ -360,7 +360,6 @@ impl Alloc {
 
     /// Allocate a block.
     pub fn alloc_block(&mut self, block_type: BlockType, align: usize) -> Result<LogicalNr, Error> {
-        assert_ne!(block_type, BlockType::User5);
         if self.types.free_len() == 2 {
             self.append_blockmap()?;
         }

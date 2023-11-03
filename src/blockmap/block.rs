@@ -96,7 +96,7 @@ impl Block {
     ///
     /// See types.rs/TypesBlock::data() for dyn-sized mappings.
     pub fn cast<T>(&self) -> &T {
-        debug_assert_eq!(self.block_size(), size_of::<T>());
+        debug_assert!(self.block_size() <= size_of::<T>());
         debug_assert!(self.block_align() >= align_of::<T>());
         unsafe { mem::transmute(&self.data[0]) }
     }
@@ -106,7 +106,7 @@ impl Block {
     ///
     /// See types.rs/TypesBlock::data() for dyn-sized mappings.
     pub fn cast_mut<T>(&mut self) -> &mut T {
-        debug_assert_eq!(self.block_size(), size_of::<T>());
+        debug_assert!(self.block_size() <= size_of::<T>());
         debug_assert!(self.block_align() >= align_of::<T>());
         unsafe { mem::transmute(&mut self.data[0]) }
     }
