@@ -103,6 +103,7 @@ impl Block {
         self.data.fill(0);
     }
 
+    // verifies T
     fn verify_cast<T>(&self) {
         let block_size = self.block_size();
         let block_align = self.block_align();
@@ -131,21 +132,25 @@ impl Block {
 
     /// Transmutes the buffer to a array of T.
     /// Returns the length of the array.
-    pub fn len_array<T>(&self) -> usize {
+    pub fn len_array<T>(block_size: usize) -> usize {
+        block_size / size_of::<T>()
+    }
+
+    // verifies T
+    fn verify_array<T>(&self) {
         let block_size = self.block_size();
         let block_align = self.block_align();
 
         debug_assert!(size_of::<T>() > 0);
         debug_assert!(size_of::<T>() <= block_size);
         debug_assert!(align_of::<[T; 1]>() <= block_align);
-
-        block_size / size_of::<T>()
     }
 
     /// Transmutes the buffer to a array of T.
     pub fn cast_array<T>(&self) -> &[T] {
         unsafe {
-            let len_array = self.len_array::<T>();
+            self.verify_array::<T>();
+            let len_array = Self::len_array::<T>(self.block_size());
             let start_ptr = &self.data[0] as *const u8;
             &*ptr::slice_from_raw_parts(start_ptr as *const T, len_array)
         }
@@ -154,42 +159,53 @@ impl Block {
     /// Transmutes the buffer to a array of T.
     pub fn cast_array_mut<T>(&mut self) -> &mut [T] {
         unsafe {
-            let len_array = self.len_array::<T>();
+            self.verify_array::<T>();
+            let len_array = Self::len_array::<T>(self.block_size());
             let start_ptr = &mut self.data[0] as *mut u8;
             &mut *ptr::slice_from_raw_parts_mut(start_ptr as *mut T, len_array)
         }
     }
 
     /// Transmutes the buffer to a header followed by array of T.
-    fn offset_len_header_array<H, T>(&self) -> (usize, usize) {
-        let block_size = self.block_size();
-        let block_align = self.block_align();
-
+    fn offset_len_header_array<H, T>(block_size: usize) -> ((usize, usize), (usize, usize)) {
         let layout_header = Layout::from_size_align(size_of::<H>(), align_of::<H>())
             .expect("layout")
             .pad_to_align();
         let layout_array = Layout::array::<T>(1).expect("layout").pad_to_align();
         let (layout_struct, offset_array) = layout_header.extend(layout_array).expect("layout");
         let layout_struct = layout_struct.pad_to_align();
+
         let len_array = (block_size - offset_array) / layout_array.size();
 
-        debug_assert!(layout_struct.size() > 0);
-        debug_assert!(layout_struct.size() <= block_size);
-        debug_assert!(layout_struct.align() <= block_align);
-
-        (offset_array, len_array)
+        (
+            (layout_struct.size(), layout_struct.align()),
+            (offset_array, len_array),
+        )
     }
 
     /// Transmutes the buffer to a header followed by array of T.
     /// Returns the length of the array.
-    pub fn len_header_array<H, T>(&self) -> usize {
-        self.offset_len_header_array::<H, T>().1
+    pub fn len_header_array<H, T>(block_size: usize) -> usize {
+        let (_, (_offset, len)) = Self::offset_len_header_array::<H, T>(block_size);
+        len
+    }
+
+    /// Transmutes the buffer to a header followed by array of T.
+    fn verify_len_header_array<H, T>(&self) {
+        let ((size, align), _) = Self::offset_len_header_array::<H, T>(self.block_size());
+
+        debug_assert!(size > 0);
+        debug_assert!(size <= self.block_size());
+        debug_assert!(align <= self.block_align());
     }
 
     /// Transmutes the buffer to a header followed by array of T.
     pub fn cast_header_array<H, T>(&self) -> HeaderArray<'_, H, T> {
         unsafe {
-            let (offset_array, len_array) = self.offset_len_header_array::<H, T>();
+            self.verify_len_header_array::<H, T>();
+
+            let (_, (offset_array, len_array)) =
+                Self::offset_len_header_array::<H, T>(self.block_size());
 
             let (header, array) = self.data.split_at(offset_array);
 
@@ -203,7 +219,10 @@ impl Block {
     /// Transmutes the buffer to a header followed by array of T.
     pub fn cast_header_array_mut<H, T>(&mut self) -> HeaderArrayMut<'_, H, T> {
         unsafe {
-            let (offset_array, len_array) = self.offset_len_header_array::<H, T>();
+            self.verify_len_header_array::<H, T>();
+
+            let (_, (offset_array, len_array)) =
+                Self::offset_len_header_array::<H, T>(self.block_size());
 
             let (header, array) = self.data.split_at_mut(offset_array);
 
