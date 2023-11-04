@@ -1,4 +1,4 @@
-use crate::blockmap::block::Block;
+use crate::blockmap::block::{Block, HeaderArray, HeaderArrayMut};
 use crate::blockmap::{block_io, BlockType, _INIT_PHYSICAL_NR};
 use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr};
 use bit_set::BitSet;
@@ -6,7 +6,6 @@ use std::cmp::max;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::mem::{align_of, size_of};
-use std::ptr;
 
 /// Manages the map logical->physical block.
 pub(crate) struct Physical {
@@ -19,14 +18,15 @@ pub(crate) struct Physical {
 /// Wrapper around a block.
 pub struct PhysicalBlock(pub(crate) Block);
 
-/// dyn-sized struct for the map. Grows with the block-size.
 #[repr(C)]
 #[derive(Debug)]
-struct BlockMapPhysical {
+struct PhysicalHeader {
     start_nr: LogicalNr,
     next_nr: LogicalNr,
-    physical: [PhysicalNr],
 }
+
+type PhysicalData<'a> = HeaderArray<'a, PhysicalHeader, PhysicalNr>;
+type PhysicalDataMut<'a> = HeaderArrayMut<'a, PhysicalHeader, PhysicalNr>;
 
 impl Physical {
     /// Init new map.
@@ -292,12 +292,12 @@ impl PhysicalBlock {
 
     /// First block-nr contained.
     pub fn start_nr(&self) -> LogicalNr {
-        self.data().start_nr
+        self.data().header.start_nr
     }
 
     /// Set the first block-nr.
     pub(super) fn set_start_nr(&mut self, start_nr: LogicalNr) {
-        self.data_mut().start_nr = start_nr;
+        self.data_mut().header.start_nr = start_nr;
         self.0.set_dirty(true);
     }
 
@@ -308,12 +308,12 @@ impl PhysicalBlock {
 
     /// Block-nr of the next block-map.
     pub fn next_nr(&self) -> LogicalNr {
-        self.data().next_nr
+        self.data().header.next_nr
     }
 
     /// Block-nr of the next block-map.
     pub(super) fn set_next_nr(&mut self, next_nr: LogicalNr) {
-        self.data_mut().next_nr = next_nr;
+        self.data_mut().header.next_nr = next_nr;
         self.0.set_dirty(true);
     }
 
@@ -321,28 +321,28 @@ impl PhysicalBlock {
     pub fn iter_nr(&self) -> impl Iterator<Item = (LogicalNr, PhysicalNr)> + '_ {
         struct NrIter<'a> {
             idx: usize,
-            data: &'a BlockMapPhysical,
+            start_nr: LogicalNr,
+            physical: &'a [PhysicalNr],
         }
         impl<'a> Iterator for NrIter<'a> {
             type Item = (LogicalNr, PhysicalNr);
 
             fn next(&mut self) -> Option<Self::Item> {
-                if self.idx >= self.data.physical.len() {
+                if self.idx >= self.physical.len() {
                     None
                 } else {
-                    let v = (
-                        self.data.start_nr + self.idx as u32,
-                        self.data.physical[self.idx],
-                    );
+                    let v = (self.start_nr + self.idx as u32, self.physical[self.idx]);
                     self.idx += 1;
                     Some(v)
                 }
             }
         }
 
+        let data = self.data();
         NrIter {
             idx: 0,
-            data: self.data(),
+            start_nr: data.header.start_nr,
+            physical: data.array,
         }
     }
 
@@ -359,7 +359,7 @@ impl PhysicalBlock {
     ) -> Result<(), Error> {
         if self.contains(block_nr) {
             let idx = (block_nr - self.start_nr()) as usize;
-            self.data_mut().physical[idx] = physical;
+            self.data_mut().array[idx] = physical;
             self.0.set_dirty(true);
             Ok(())
         } else {
@@ -371,37 +371,20 @@ impl PhysicalBlock {
     pub fn physical_nr(&self, block_nr: LogicalNr) -> Result<PhysicalNr, Error> {
         if self.contains(block_nr) {
             let idx = (block_nr - self.start_nr()) as usize;
-            Ok(self.data().physical[idx])
+            Ok(self.data().array[idx])
         } else {
             Err(Error::err(FBErrorKind::InvalidBlock(block_nr)))
         }
     }
 
     /// Creates a view over the block.
-    fn data_mut_g(block: &mut Block) -> &mut BlockMapPhysical {
-        unsafe {
-            debug_assert!(8 <= block.block_size());
-            let s = &mut block.data[0];
-            &mut *(ptr::slice_from_raw_parts_mut(
-                s as *mut u8,
-                Self::len_physical_g(block.block_size()),
-            ) as *mut BlockMapPhysical)
-        }
+    fn data_mut(&mut self) -> PhysicalDataMut<'_> {
+        self.0.cast_header_array_mut()
     }
 
     /// Creates a view over the block.
-    fn data_mut(&mut self) -> &mut BlockMapPhysical {
-        Self::data_mut_g(&mut self.0)
-    }
-
-    /// Creates a view over the block.
-    fn data(&self) -> &BlockMapPhysical {
-        unsafe {
-            debug_assert!(8 <= self.0.block_size());
-            let s = &self.0.data[0];
-            &*(ptr::slice_from_raw_parts(s as *const u8, self.len_physical())
-                as *const BlockMapPhysical)
-        }
+    fn data(&self) -> PhysicalData<'_> {
+        self.0.cast_header_array()
     }
 }
 
@@ -473,7 +456,7 @@ impl Debug for PhysicalBlock {
 
         s.field(
             "physical",
-            &RefPhysical(&self.data().physical, self.start_nr().as_usize()),
+            &RefPhysical(&self.data().array, self.start_nr().as_usize()),
         );
         s.finish()?;
         Ok(())

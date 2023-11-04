@@ -3,7 +3,7 @@ use crate::LogicalNr;
 use std::alloc::Layout;
 use std::fmt::{Debug, Formatter};
 use std::mem::{align_of, align_of_val, size_of};
-use std::{alloc, mem};
+use std::{alloc, mem, ptr};
 
 /// Data for one block of the file.
 pub struct Block {
@@ -14,6 +14,18 @@ pub struct Block {
     generation: u32,
     /// Datablock
     pub data: Box<[u8]>,
+}
+
+/// Helper struct for splitting the data-block into header and array-of-T
+pub struct HeaderArray<'a, H, T> {
+    pub header: &'a H,
+    pub array: &'a [T],
+}
+
+/// Helper struct for splitting the data-block into header and array-of-T
+pub struct HeaderArrayMut<'a, H, T> {
+    pub header: &'a mut H,
+    pub array: &'a mut [T],
 }
 
 impl Block {
@@ -91,13 +103,20 @@ impl Block {
         self.data.fill(0);
     }
 
+    fn verify_cast<T>(&self) {
+        let block_size = self.block_size();
+        let block_align = self.block_align();
+
+        debug_assert!(size_of::<T>() <= block_size);
+        debug_assert!(align_of::<T>() <= block_align);
+    }
+
     /// Transmutes the buffer to a reference to T.
     /// Asserts that size and alignment match.
     ///
     /// See types.rs/TypesBlock::data() for dyn-sized mappings.
     pub fn cast<T>(&self) -> &T {
-        debug_assert!(self.block_size() <= size_of::<T>());
-        debug_assert!(self.block_align() >= align_of::<T>());
+        self.verify_cast::<T>();
         unsafe { mem::transmute(&self.data[0]) }
     }
 
@@ -106,9 +125,94 @@ impl Block {
     ///
     /// See types.rs/TypesBlock::data() for dyn-sized mappings.
     pub fn cast_mut<T>(&mut self) -> &mut T {
-        debug_assert!(self.block_size() <= size_of::<T>());
-        debug_assert!(self.block_align() >= align_of::<T>());
+        self.verify_cast::<T>();
         unsafe { mem::transmute(&mut self.data[0]) }
+    }
+
+    /// Transmutes the buffer to a array of T.
+    /// Returns the length of the array.
+    pub fn len_array<T>(&self) -> usize {
+        let block_size = self.block_size();
+        let block_align = self.block_align();
+
+        debug_assert!(size_of::<T>() > 0);
+        debug_assert!(size_of::<T>() <= block_size);
+        debug_assert!(align_of::<[T; 1]>() <= block_align);
+
+        block_size / size_of::<T>()
+    }
+
+    /// Transmutes the buffer to a array of T.
+    pub fn cast_array<T>(&self) -> &[T] {
+        unsafe {
+            let len_array = self.len_array::<T>();
+            let start_ptr = &self.data[0] as *const u8;
+            &*ptr::slice_from_raw_parts(start_ptr as *const T, len_array)
+        }
+    }
+
+    /// Transmutes the buffer to a array of T.
+    pub fn cast_array_mut<T>(&mut self) -> &mut [T] {
+        unsafe {
+            let len_array = self.len_array::<T>();
+            let start_ptr = &mut self.data[0] as *mut u8;
+            &mut *ptr::slice_from_raw_parts_mut(start_ptr as *mut T, len_array)
+        }
+    }
+
+    /// Transmutes the buffer to a header followed by array of T.
+    fn offset_len_header_array<H, T>(&self) -> (usize, usize) {
+        let block_size = self.block_size();
+        let block_align = self.block_align();
+
+        let layout_header = Layout::from_size_align(size_of::<H>(), align_of::<H>())
+            .expect("layout")
+            .pad_to_align();
+        let layout_array = Layout::array::<T>(1).expect("layout").pad_to_align();
+        let (layout_struct, offset_array) = layout_header.extend(layout_array).expect("layout");
+        let layout_struct = layout_struct.pad_to_align();
+        let len_array = (block_size - offset_array) / layout_array.size();
+
+        debug_assert!(layout_struct.size() > 0);
+        debug_assert!(layout_struct.size() <= block_size);
+        debug_assert!(layout_struct.align() <= block_align);
+
+        (offset_array, len_array)
+    }
+
+    /// Transmutes the buffer to a header followed by array of T.
+    /// Returns the length of the array.
+    pub fn len_header_array<H, T>(&self) -> usize {
+        self.offset_len_header_array::<H, T>().1
+    }
+
+    /// Transmutes the buffer to a header followed by array of T.
+    pub fn cast_header_array<H, T>(&self) -> HeaderArray<'_, H, T> {
+        unsafe {
+            let (offset_array, len_array) = self.offset_len_header_array::<H, T>();
+
+            let (header, array) = self.data.split_at(offset_array);
+
+            let header = mem::transmute::<_, &H>(&header[0]);
+            let array = &*ptr::slice_from_raw_parts(&array[0] as *const u8 as *const T, len_array);
+
+            HeaderArray { header, array }
+        }
+    }
+
+    /// Transmutes the buffer to a header followed by array of T.
+    pub fn cast_header_array_mut<H, T>(&mut self) -> HeaderArrayMut<'_, H, T> {
+        unsafe {
+            let (offset_array, len_array) = self.offset_len_header_array::<H, T>();
+
+            let (header, array) = self.data.split_at_mut(offset_array);
+
+            let header = mem::transmute::<_, &mut H>(&mut header[0]);
+            let array =
+                &mut *ptr::slice_from_raw_parts_mut(&mut array[0] as *mut u8 as *mut T, len_array);
+
+            HeaderArrayMut { header, array }
+        }
     }
 }
 

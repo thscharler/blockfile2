@@ -196,26 +196,13 @@ impl HeaderBlock {
     }
 
     /// View over the block-data.
-    fn data_mut_g(block: &mut Block) -> &mut BlockMapHeader {
-        unsafe {
-            debug_assert!(size_of::<BlockMapHeader>() <= block.block_size());
-            let s = &mut block.data[0];
-            &mut *(s as *mut u8 as *mut BlockMapHeader)
-        }
-    }
-
-    /// View over the block-data.
     fn data_mut(&mut self) -> &mut BlockMapHeader {
-        Self::data_mut_g(&mut self.0)
+        self.0.cast_mut()
     }
 
     /// View over the block-data.
     fn data(&self) -> &BlockMapHeader {
-        unsafe {
-            debug_assert!(size_of::<BlockMapHeader>() <= self.0.block_size());
-            let s = &self.0.data[0];
-            &*(s as *const u8 as *const BlockMapHeader)
-        }
+        self.0.cast()
     }
 }
 

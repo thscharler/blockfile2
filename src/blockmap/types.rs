@@ -1,4 +1,4 @@
-use crate::blockmap::block::Block;
+use crate::blockmap::block::{Block, HeaderArray, HeaderArrayMut};
 use crate::blockmap::physical::Physical;
 use crate::blockmap::{block_io, BlockType, _INIT_HEADER_NR, _INIT_PHYSICAL_NR, _INIT_TYPES_NR};
 use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
@@ -6,7 +6,6 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::marker::PhantomData;
 use std::mem::size_of;
-use std::ptr;
 
 /// Manages block-types.
 pub(crate) struct Types {
@@ -18,13 +17,15 @@ pub(crate) struct Types {
 /// Wrapper around a block of the type-map.
 pub struct TypesBlock(pub(crate) Block);
 
-/// dyn-sized struct for the block-types. Grows with the block-size.
 #[repr(C)]
-struct BlockMapType {
+#[derive(Debug)]
+struct TypesHeader {
     start_nr: LogicalNr,
     next_nr: LogicalNr,
-    block_type: [BlockType],
 }
+
+type TypesData<'a> = HeaderArray<'a, TypesHeader, BlockType>;
+type TypesDataMut<'a> = HeaderArrayMut<'a, TypesHeader, BlockType>;
 
 impl Types {
     /// Init new type-map.
@@ -258,9 +259,9 @@ impl TypesBlock {
     pub(super) fn init(block_size: usize) -> Self {
         let mut block_0 = Block::new(_INIT_TYPES_NR, block_size, 4, BlockType::Types);
         let types_0 = Self::data_mut_g(&mut block_0);
-        types_0.block_type[_INIT_HEADER_NR.as_usize()] = BlockType::Header;
-        types_0.block_type[_INIT_TYPES_NR.as_usize()] = BlockType::Types;
-        types_0.block_type[_INIT_PHYSICAL_NR.as_usize()] = BlockType::Physical;
+        types_0.array[_INIT_HEADER_NR.as_usize()] = BlockType::Header;
+        types_0.array[_INIT_TYPES_NR.as_usize()] = BlockType::Types;
+        types_0.array[_INIT_PHYSICAL_NR.as_usize()] = BlockType::Physical;
 
         Self(block_0)
     }
@@ -312,12 +313,12 @@ impl TypesBlock {
 
     /// First block-nr contained.
     pub fn start_nr(&self) -> LogicalNr {
-        self.data().start_nr
+        self.data().header.start_nr
     }
 
     /// Set the first block-nr.
     pub(super) fn set_start_nr(&mut self, start_nr: LogicalNr) {
-        self.data_mut().start_nr = start_nr;
+        self.data_mut().header.start_nr = start_nr;
         self.0.set_dirty(true);
     }
 
@@ -328,12 +329,12 @@ impl TypesBlock {
 
     /// Block-nr of the next block-map.
     pub fn next_nr(&self) -> LogicalNr {
-        self.data().next_nr
+        self.data().header.next_nr
     }
 
     /// Block-nr of the next block-map.
     pub(super) fn set_next_nr(&mut self, next_nr: LogicalNr) {
-        self.data_mut().next_nr = next_nr;
+        self.data_mut().header.next_nr = next_nr;
         self.0.set_dirty(true);
     }
 
@@ -344,7 +345,8 @@ impl TypesBlock {
         struct NrIter<'a> {
             idx: usize,
             idx_end: usize,
-            data: &'a BlockMapType,
+            start_nr: LogicalNr,
+            block_type: &'a [BlockType],
         }
         impl<'a> DoubleEndedIterator for NrIter<'a> {
             fn next_back(&mut self) -> Option<Self::Item> {
@@ -353,8 +355,8 @@ impl TypesBlock {
                 } else {
                     self.idx_end -= 1;
                     let v = (
-                        self.data.start_nr + self.idx_end as u32,
-                        self.data.block_type[self.idx_end],
+                        self.start_nr + self.idx_end as u32,
+                        self.block_type[self.idx_end],
                     );
                     Some(v)
                 }
@@ -367,20 +369,19 @@ impl TypesBlock {
                 if self.idx >= self.idx_end {
                     None
                 } else {
-                    let v = (
-                        self.data.start_nr + self.idx as u32,
-                        self.data.block_type[self.idx],
-                    );
+                    let v = (self.start_nr + self.idx as u32, self.block_type[self.idx]);
                     self.idx += 1;
                     Some(v)
                 }
             }
         }
 
+        let data = self.data();
         NrIter {
             idx: 0,
-            idx_end: self.data().block_type.len(),
-            data: self.data(),
+            idx_end: data.array.len(),
+            start_nr: data.header.start_nr,
+            block_type: data.array,
         }
     }
 
@@ -397,7 +398,7 @@ impl TypesBlock {
     ) -> Result<(), Error> {
         if self.contains(block_nr) {
             let idx = (block_nr - self.start_nr()) as usize;
-            self.data_mut().block_type[idx] = block_type;
+            self.data_mut().array[idx] = block_type;
             self.0.set_dirty(true);
             Ok(())
         } else {
@@ -409,36 +410,25 @@ impl TypesBlock {
     pub fn block_type(&self, block_nr: LogicalNr) -> Result<BlockType, Error> {
         if self.contains(block_nr) {
             let idx = (block_nr - self.start_nr()) as usize;
-            Ok(self.data().block_type[idx])
+            Ok(self.data().array[idx])
         } else {
             Err(Error::err(FBErrorKind::InvalidBlock(block_nr)))
         }
     }
 
     /// Creates a view over the block.
-    fn data_mut_g(block: &mut Block) -> &mut BlockMapType {
-        unsafe {
-            debug_assert!(8 <= block.block_size());
-            let s = &mut block.data[0];
-            &mut *(ptr::slice_from_raw_parts_mut(
-                s as *mut u8,
-                Self::len_types_g(block.block_size()),
-            ) as *mut BlockMapType)
-        }
+    fn data_mut_g(block: &mut Block) -> TypesDataMut<'_> {
+        block.cast_header_array_mut()
     }
 
     /// Creates a view over the block.
-    fn data_mut(&mut self) -> &mut BlockMapType {
-        Self::data_mut_g(&mut self.0)
+    fn data_mut(&mut self) -> TypesDataMut<'_> {
+        self.0.cast_header_array_mut()
     }
 
     /// Creates a view over the block.
-    fn data(&self) -> &BlockMapType {
-        unsafe {
-            debug_assert!(8 <= self.0.block_size());
-            let s = &self.0.data[0];
-            &*(ptr::slice_from_raw_parts(s as *const u8, self.len_types()) as *const BlockMapType)
-        }
+    fn data(&self) -> TypesData<'_> {
+        self.0.cast_header_array()
     }
 }
 
@@ -526,7 +516,7 @@ where
         s.field(
             "types",
             &RefTypes::<U>(
-                &self.0.data().block_type,
+                self.0.data().array,
                 self.0.start_nr().as_usize(),
                 PhantomData,
             ),

@@ -7,7 +7,7 @@ use std::ops::{Add, AddAssign, Sub};
 mod blockmap;
 mod fileblocks;
 
-pub use crate::blockmap::{Block, BlockType, HeaderBlock, PhysicalBlock, State, TypesBlock};
+pub use crate::blockmap::{Alloc, Block, BlockType, HeaderBlock, PhysicalBlock, State, TypesBlock};
 pub use crate::fileblocks::{BasicFileBlocks, FileBlocks};
 
 /// User defined mapping of block-types.

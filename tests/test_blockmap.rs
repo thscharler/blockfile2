@@ -3,10 +3,52 @@ use blockfile2::{
     UserBlockType,
 };
 use std::fs::File;
+use std::mem::{align_of, size_of};
 use std::panic::catch_unwind;
 use std::path::Path;
 
 const BLOCK_SIZE: usize = 128;
+
+#[test]
+fn test_size() {
+    #[repr(C)]
+    struct One {
+        one: u8,
+    }
+
+    println!("size_of One {}", size_of::<One>());
+    println!("align_of One {}", align_of::<One>());
+    println!("size_of [One; 1] {}", size_of::<[One; 1]>());
+    println!("align_of [One; 1] {}", align_of::<[One; 1]>());
+    println!("size_of [One; 5] {}", size_of::<[One; 5]>());
+    println!("align_of [One; 5] {}", align_of::<[One; 5]>());
+
+    #[repr(C)]
+    struct Two {
+        one: u8,
+        two: u32,
+    }
+
+    println!("size_of Two {}", size_of::<Two>());
+    println!("align_of Two {}", align_of::<Two>());
+    println!("size_of [Two; 1] {}", size_of::<[Two; 1]>());
+    println!("align_of [Two; 1] {}", align_of::<[Two; 1]>());
+    println!("size_of [Two; 5] {}", size_of::<[Two; 5]>());
+    println!("align_of [Two; 5] {}", align_of::<[Two; 5]>());
+
+    #[repr(C)]
+    struct Three {
+        two: u32,
+        three: u64,
+    }
+
+    println!("size_of Three {}", size_of::<Three>());
+    println!("align_of Three {}", align_of::<Three>());
+    println!("size_of [Three; 1] {}", size_of::<[Three; 1]>());
+    println!("align_of [Three; 1] {}", align_of::<[Three; 1]>());
+    println!("size_of [Three; 5] {}", size_of::<[Three; 5]>());
+    println!("align_of [Three; 5] {}", align_of::<[Three; 5]>());
+}
 
 #[test]
 fn test_init() {
@@ -78,9 +120,9 @@ fn test_store() -> Result<(), Error> {
 
     let fb = BasicFileBlocks::load(&Path::new("tmp/store.bin"), BLOCK_SIZE)?;
 
-    let m = fb.block_type(0.into()).expect("meta-data");
+    let m = fb.block_type(LogicalNr(0)).expect("meta-data");
     assert_eq!(m.block_type(), BlockType::Header);
-    let m = fb.block_type(3.into()).expect("meta-data");
+    let m = fb.block_type(LogicalNr(3)).expect("meta-data");
     assert_eq!(m.block_type(), BlockType::User1);
 
     dbg!(&fb);
@@ -91,25 +133,25 @@ fn test_store() -> Result<(), Error> {
 #[test]
 fn test_illegal() -> Result<(), Error> {
     let mut fb = BasicFileBlocks::create(&Path::new("tmp/not_dirty.bin"), BLOCK_SIZE)?;
-    let r = fb.get(0.into());
+    let r = fb.get(LogicalNr(0));
     assert_eq!(
         r.expect_err("error").kind,
-        FBErrorKind::AccessDenied(0.into())
+        FBErrorKind::AccessDenied(LogicalNr(0))
     );
-    let r = fb.get(1.into());
+    let r = fb.get(LogicalNr(1));
     assert_eq!(
         r.expect_err("error").kind,
-        FBErrorKind::AccessDenied(1.into())
+        FBErrorKind::AccessDenied(LogicalNr(1))
     );
-    let r = fb.get(2.into());
+    let r = fb.get(LogicalNr(2));
     assert_eq!(
         r.expect_err("error").kind,
-        FBErrorKind::AccessDenied(2.into())
+        FBErrorKind::AccessDenied(LogicalNr(2))
     );
-    let r = fb.get(3.into());
+    let r = fb.get(LogicalNr(3));
     assert_eq!(
         r.expect_err("error").kind,
-        FBErrorKind::NotAllocated(3.into())
+        FBErrorKind::NotAllocated(LogicalNr(3))
     );
     Ok(())
 }
@@ -124,7 +166,7 @@ fn test_not_dirty() -> Result<(), Error> {
 
     let mut fb = BasicFileBlocks::load(&Path::new("tmp/not_dirty.bin"), BLOCK_SIZE)?;
 
-    let m = fb.get(3.into())?;
+    let m = fb.get(LogicalNr(3))?;
     assert_eq!(m.data[0], 0);
 
     Ok(())
@@ -150,16 +192,16 @@ fn store_panic(panic_: u32) -> Result<BasicFileBlocks, Error> {
 #[test]
 fn test_recover() -> Result<(), Error> {
     for i in 1..=6 {
-        let fb = store_panic(1)?;
+        let fb = store_panic(i)?;
         assert_eq!(
-            fb.block_type(3.into()).expect("block_type"),
+            fb.block_type(LogicalNr(3)).expect("block_type"),
             BlockType::NotAllocated
         );
     }
 
     let fb = store_panic(7)?;
     assert_eq!(
-        fb.block_type(3.into()).expect("block_type"),
+        fb.block_type(LogicalNr(3)).expect("block_type"),
         BlockType::User1
     );
 
