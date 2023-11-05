@@ -120,7 +120,7 @@ where
             U: UserBlockType + Debug,
         {
             fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-                for r in 0..(self.0.len() + 8) / 8 {
+                'l: for r in 0..(self.0.len() + 8) / 8 {
                     writeln!(f)?;
                     for c in 0..8 {
                         let i = r * 8 + c;
@@ -132,6 +132,9 @@ where
                                 user_type_string::<U>(self.0[i].block_type),
                                 self.0[i].idx
                             )?;
+                        } else {
+                            writeln!(f)?;
+                            break 'l;
                         }
                     }
                 }

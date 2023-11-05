@@ -289,7 +289,7 @@ impl Debug for Block {
 }
 
 /// Create a dyn box for the buffer.
-fn alloc_box_buffer(len: usize, align: usize) -> Box<[u8]> {
+pub fn alloc_box_buffer(len: usize, align: usize) -> Box<[u8]> {
     if len == 0 {
         return <Box<[u8]>>::default();
     }

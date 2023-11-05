@@ -2,6 +2,7 @@ use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fs::File;
+use std::io;
 use std::io::{Read, Write};
 
 mod block;
@@ -15,7 +16,7 @@ mod types;
 use physical::Physical;
 use types::Types;
 
-pub use block::Block;
+pub use block::{alloc_box_buffer, Block};
 pub use blocktype::BlockType;
 pub use header::{HeaderBlock, State};
 pub use physical::PhysicalBlock;
@@ -538,7 +539,7 @@ impl Alloc {
         &mut self,
         block_type: BlockType,
         block_align: usize,
-    ) -> Result<impl Read + '_, Error> {
+    ) -> Result<impl BlockRead + '_, Error> {
         let block_nrs: Vec<_> = self
             .iter_metadata(&|_nr, ty| ty == block_type)
             .map(|(nr, _ty)| nr)
@@ -551,7 +552,7 @@ impl Alloc {
             write_head: head_idx,
             block_nrs,
             block_idx: 0,
-            data_idx: 0,
+            read_head: 0,
         })
     }
 
@@ -659,6 +660,8 @@ impl<'a> Write for BlockWriter<'a> {
 
             part.len()
         } else if block_size >= buf.len() {
+            self.alloc.discard_block(block_nr);
+
             // allocate and write complete buffer.
             block_nr = self.alloc.alloc_block(block_type, block_align)?;
             // write_head = 0;
@@ -672,6 +675,8 @@ impl<'a> Write for BlockWriter<'a> {
 
             buf.len()
         } else if block_size < buf.len() {
+            self.alloc.discard_block(block_nr);
+
             // allocate and write whole block
             block_nr = self.alloc.alloc_block(block_type, block_align)?;
             // write_head = 0;
@@ -695,13 +700,47 @@ impl<'a> Write for BlockWriter<'a> {
             .streams
             .set_head_idx(self.block_type, self.write_head)?;
 
-        dbg!(self.block_nr, self.write_head);
-
         Ok(n)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+pub trait BlockRead: Read {
+    /// Current read block-nr.
+    fn block_nr(&self) -> LogicalNr;
+    /// Current read idx.
+    fn idx(&self) -> usize;
+
+    /// The buffer is either fully readable or not at all.
+    fn read_maybe(&mut self, buf: &mut [u8]) -> io::Result<bool> {
+        let n = self.read(buf)?;
+        if n == 0 {
+            Ok(false)
+        } else if n == buf.len() {
+            Ok(true)
+        } else if n < buf.len() {
+            self.read_exact(&mut buf[n..])?;
+            Ok(true)
+        } else {
+            unreachable!()
+        }
+    }
+}
+
+impl<'a> BlockRead for BlockReader<'a> {
+    fn block_nr(&self) -> LogicalNr {
+        if self.block_nrs.len() == 0 {
+            LogicalNr(0)
+        } else {
+            self.block_nrs[self.block_idx]
+        }
+    }
+
+    fn idx(&self) -> usize {
+        self.read_head
     }
 }
 
@@ -713,7 +752,7 @@ struct BlockReader<'a> {
 
     block_nrs: Vec<LogicalNr>,
     block_idx: usize,
-    data_idx: usize,
+    read_head: usize,
 }
 
 #[inline]
@@ -723,7 +762,9 @@ fn max_read_size(
     head_idx: usize,
     block_size: usize,
 ) -> usize {
-    if block_idx + 1 == block_nrs.len() {
+    if block_nrs.len() == 0 {
+        0
+    } else if block_idx + 1 == block_nrs.len() {
         head_idx
     } else {
         block_size
@@ -739,20 +780,27 @@ impl<'a> Read for BlockReader<'a> {
         let block_nrs = &self.block_nrs;
 
         let mut block_idx = self.block_idx;
-        let mut data_idx = self.data_idx;
+        let mut data_idx = self.read_head;
         let mut logical_block_size = max_read_size(block_nrs, block_idx, write_head, block_size);
 
-        // next block needed?
-        let block = if data_idx < logical_block_size {
+        let block = if logical_block_size == 0 {
+            // no stream at all
+            return Ok(0);
+        } else if data_idx < logical_block_size {
+            // current block
             self.alloc.block(block_nrs[block_idx], block_align)?
         } else if data_idx == logical_block_size && block_idx + 1 < block_nrs.len() {
+            // next block
             block_idx += 1;
             data_idx = 0;
             logical_block_size = max_read_size(block_nrs, block_idx, write_head, block_size);
 
             self.alloc.block(self.block_nrs[block_idx], block_align)?
-        } else {
+        } else if data_idx == logical_block_size && block_idx + 1 == block_nrs.len() {
+            // end of last
             return Ok(0);
+        } else {
+            unreachable!()
         };
 
         // copy data and forward
@@ -769,7 +817,7 @@ impl<'a> Read for BlockReader<'a> {
 
         // write back state
         self.block_idx = block_idx;
-        self.data_idx = data_idx;
+        self.read_head = data_idx;
 
         Ok(n)
     }

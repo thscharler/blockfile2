@@ -1,4 +1,4 @@
-use crate::blockmap::{block_io, Alloc, UserStreamsBlock, UserTypes};
+use crate::blockmap::{block_io, Alloc, BlockRead, UserStreamsBlock, UserTypes};
 use crate::{
     Block, BlockType, BlockWrite, Error, FBErrorKind, HeaderBlock, LogicalNr, PhysicalBlock, State,
     StreamsBlock, TypesBlock, UserBlockType,
@@ -129,10 +129,13 @@ where
         filter: F,
     ) -> impl Iterator<Item = (LogicalNr, U)> + DoubleEndedIterator
     where
-        F: Fn(LogicalNr, BlockType) -> bool,
+        F: Fn(LogicalNr, U) -> bool,
     {
         self.alloc
-            .iter_metadata(&filter)
+            .iter_metadata(&move |nr, ty| match U::user_type(ty) {
+                None => false,
+                Some(ty) => filter(nr, ty),
+            })
             .filter_map(|(nr, ty)| U::user_type(ty).map(|ty| (nr, ty)))
     }
 
@@ -198,7 +201,7 @@ where
     }
 
     /// Get a Reader that reads the contents of one BlockType in order.
-    pub fn read_stream(&mut self, user_type: U) -> Result<impl Read + '_, Error> {
+    pub fn read_stream(&mut self, user_type: U) -> Result<impl BlockRead + '_, Error> {
         if !user_type.is_stream() {
             return Err(Error::err(FBErrorKind::NotAStream(user_type.block_type())));
         }

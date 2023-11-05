@@ -9,8 +9,8 @@ mod blockmap;
 mod fileblocks;
 
 pub use crate::blockmap::{
-    Alloc, Block, BlockType, BlockWrite, HeaderBlock, PhysicalBlock, State, StreamsBlock,
-    TypesBlock,
+    alloc_box_buffer, Alloc, Block, BlockRead, BlockType, BlockWrite, HeaderBlock, PhysicalBlock,
+    State, StreamsBlock, TypesBlock,
 };
 pub use crate::fileblocks::{BasicFileBlocks, FileBlocks};
 
