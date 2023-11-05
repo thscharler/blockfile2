@@ -1,6 +1,8 @@
 use crate::blockmap::block::{Block, HeaderArray, HeaderArrayMut};
 use crate::blockmap::physical::Physical;
-use crate::blockmap::{block_io, BlockType, _INIT_HEADER_NR, _INIT_PHYSICAL_NR, _INIT_TYPES_NR};
+use crate::blockmap::{
+    block_io, BlockType, _INIT_HEADER_NR, _INIT_PHYSICAL_NR, _INIT_STREAM_NR, _INIT_TYPES_NR,
+};
 use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
@@ -155,16 +157,6 @@ impl Types {
     }
 
     /// Returns the block-map with the given block-nr.
-    #[allow(dead_code)]
-    pub fn blockmap(&self, block_nr: LogicalNr) -> Result<&TypesBlock, Error> {
-        let find = self.blocks.iter().find(|v| v.block_nr() == block_nr);
-        match find {
-            Some(v) => Ok(v),
-            None => Err(Error::err(FBErrorKind::InvalidBlock(block_nr))),
-        }
-    }
-
-    /// Returns the block-map with the given block-nr.
     pub fn blockmap_mut(&mut self, block_nr: LogicalNr) -> Result<&mut TypesBlock, Error> {
         let find = self.blocks.iter_mut().find(|v| v.block_nr() == block_nr);
         match find {
@@ -203,16 +195,33 @@ impl Types {
     }
 
     /// Iterate block-nr and type.
-    pub fn iter_block_type(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> {
+    pub fn iter_block_type<F>(
+        &self,
+        filter: &F,
+    ) -> impl Iterator<Item = (LogicalNr, BlockType)> + DoubleEndedIterator
+    where
+        F: Fn(LogicalNr, BlockType) -> bool,
+    {
         struct TyIter {
             idx: usize,
+            end_idx: usize,
             blocks: Vec<(LogicalNr, BlockType)>,
+        }
+        impl DoubleEndedIterator for TyIter {
+            fn next_back(&mut self) -> Option<Self::Item> {
+                if self.end_idx == self.idx {
+                    None
+                } else {
+                    self.end_idx -= 1;
+                    Some(self.blocks[self.end_idx])
+                }
+            }
         }
         impl Iterator for TyIter {
             type Item = (LogicalNr, BlockType);
 
             fn next(&mut self) -> Option<Self::Item> {
-                if self.idx >= self.blocks.len() {
+                if self.idx >= self.end_idx {
                     None
                 } else {
                     let next = self.blocks[self.idx];
@@ -224,12 +233,18 @@ impl Types {
 
         let mut blocks = Vec::new();
         for block in &self.blocks {
-            for v in block.iter_block_type() {
-                blocks.push(v)
+            for (nr, ty) in block.iter_block_type() {
+                if filter(nr, ty) {
+                    blocks.push((nr, ty));
+                }
             }
         }
 
-        TyIter { idx: 0, blocks }
+        TyIter {
+            idx: 0,
+            end_idx: blocks.len(),
+            blocks,
+        }
     }
 
     /// Get the blockmap that contains the given block-nr.
@@ -262,6 +277,7 @@ impl TypesBlock {
         types_0.array[_INIT_HEADER_NR.as_usize()] = BlockType::Header;
         types_0.array[_INIT_TYPES_NR.as_usize()] = BlockType::Types;
         types_0.array[_INIT_PHYSICAL_NR.as_usize()] = BlockType::Physical;
+        types_0.array[_INIT_STREAM_NR.as_usize()] = BlockType::Streams;
 
         Self(block_0)
     }
@@ -350,7 +366,7 @@ impl TypesBlock {
         }
         impl<'a> DoubleEndedIterator for NrIter<'a> {
             fn next_back(&mut self) -> Option<Self::Item> {
-                if self.idx_end <= self.idx {
+                if self.idx_end == self.idx {
                     None
                 } else {
                     self.idx_end -= 1;

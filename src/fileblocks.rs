@@ -1,10 +1,11 @@
 use crate::blockmap::{block_io, Alloc, UserTypes};
 use crate::{
-    Block, BlockType, Error, FBErrorKind, HeaderBlock, LogicalNr, PhysicalBlock, State, TypesBlock,
-    UserBlockType,
+    Block, BlockType, BlockWrite, Error, FBErrorKind, HeaderBlock, LogicalNr, PhysicalBlock, State,
+    StreamsBlock, TypesBlock, UserBlockType,
 };
 use std::fmt::{Debug, Formatter};
 use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::path::Path;
 
@@ -17,7 +18,6 @@ use std::path::Path;
 /// block and this mapping is updated for every safe. Unchanged blocks are ignored of course.
 /// This way every store can be seen as atomic.
 pub struct FileBlocks<U> {
-    file: File,
     alloc: Alloc,
     _phantom: PhantomData<U>,
 }
@@ -36,8 +36,7 @@ where
         };
 
         Ok(Self {
-            file,
-            alloc: Alloc::init(block_size),
+            alloc: Alloc::init(file, block_size),
             _phantom: Default::default(),
         })
     }
@@ -57,13 +56,12 @@ where
         };
 
         let alloc = if block_io::metadata(&mut file)?.len() == 0 {
-            Alloc::init(block_size)
+            Alloc::init(file, block_size)
         } else {
-            Alloc::load(&mut file, block_size)?
+            Alloc::load(file, block_size)?
         };
 
         Ok(Self {
-            file,
             alloc,
             _phantom: Default::default(),
         })
@@ -78,7 +76,7 @@ where
 
     /// Stores all dirty blocks.
     pub fn store(&mut self) -> Result<(), Error> {
-        self.alloc.store(&mut self.file)
+        self.alloc.store()
     }
 
     /// Header state.
@@ -101,6 +99,11 @@ where
         self.alloc.header()
     }
 
+    /// Stream data.
+    pub fn streams(&self) -> &StreamsBlock {
+        self.alloc.streams()
+    }
+
     /// Iterate over block-types.
     pub fn iter_types(&self) -> impl Iterator<Item = &'_ TypesBlock> {
         self.alloc.iter_types()
@@ -111,10 +114,25 @@ where
         self.alloc.iter_physical()
     }
 
-    /// Metadata
-    pub fn iter_metadata(&self) -> impl Iterator<Item = (LogicalNr, U)> {
+    /// Metadata iterator. Returns all allocated block-nr + user-types.
+    /// Filters out blocktypes that are not mapped to a user-type.
+    pub fn iter_metadata(&self) -> impl Iterator<Item = (LogicalNr, U)> + DoubleEndedIterator {
         self.alloc
-            .iter_metadata()
+            .iter_metadata(&|_nr, _ty| true)
+            .filter_map(|(nr, ty)| U::user_type(ty).map(|ty| (nr, ty)))
+    }
+
+    /// Metadata iterator. Returns all allocated block-nr + user-types.
+    /// Filters out blocktypes that are not mapped to a user-type.
+    pub fn iter_metadata_filter<F>(
+        &self,
+        filter: F,
+    ) -> impl Iterator<Item = (LogicalNr, U)> + DoubleEndedIterator
+    where
+        F: Fn(LogicalNr, BlockType) -> bool,
+    {
+        self.alloc
+            .iter_metadata(&filter)
             .filter_map(|(nr, ty)| U::user_type(ty).map(|ty| (nr, ty)))
     }
 
@@ -151,7 +169,7 @@ where
         let block_type = user_type.block_type();
         let align = user_type.align();
         let alloc_nr = self.alloc.alloc_block(block_type, align)?;
-        self.alloc.get_block_mut(&mut self.file, alloc_nr, align)
+        self.alloc.block_mut(alloc_nr, align)
     }
 
     /// Free a block.
@@ -160,41 +178,41 @@ where
     }
 
     /// Free user-block cache.
-    pub fn retain<F>(&mut self, mut f: F)
+    pub fn retain<F>(&mut self, f: F)
     where
         F: FnMut(&LogicalNr, &mut Block) -> bool,
     {
-        // don't allow the outside world to fuck up our data.
-        self.alloc.retain_blocks(move |k, v| match v.block_type() {
-            BlockType::NotAllocated => false,
-            BlockType::Free => false,
-            BlockType::Header => true,
-            BlockType::Types => true,
-            BlockType::Physical => true,
-            _ => f(k, v),
-        })
+        self.alloc.retain_blocks(f);
     }
 
     /// Get a data block.
     pub fn get(&mut self, block_nr: LogicalNr) -> Result<&Block, Error> {
-        let block_type = self.alloc.block_type(block_nr)?;
-        let Some(user_block_type) = U::user_type(block_type) else {
-            return Err(Error::err(FBErrorKind::NoUserBlockType(block_type)));
-        };
-        let align = U::align(user_block_type);
-
-        self.alloc.get_block(&mut self.file, block_nr, align)
+        let align = self.alloc.block_align::<U>(block_nr)?;
+        self.alloc.block(block_nr, align)
     }
 
     /// Get a data block.
     pub fn get_mut(&mut self, block_nr: LogicalNr) -> Result<&mut Block, Error> {
-        let block_type = self.alloc.block_type(block_nr)?;
-        let Some(user_block_type) = U::user_type(block_type) else {
-            return Err(Error::err(FBErrorKind::NoUserBlockType(block_type)));
-        };
-        let align = U::align(user_block_type);
+        let align = self.alloc.block_align::<U>(block_nr)?;
+        self.alloc.block_mut(block_nr, align)
+    }
 
-        self.alloc.get_block_mut(&mut self.file, block_nr, align)
+    /// Get a Reader that reads the contents of one BlockType in order.
+    pub fn read_stream(&mut self, user_type: U) -> Result<impl Read + '_, Error> {
+        if !user_type.is_stream() {
+            return Err(Error::err(FBErrorKind::NotAStream(user_type.block_type())));
+        }
+        self.alloc
+            .read_stream(user_type.block_type(), user_type.align())
+    }
+
+    /// Get a Writer that writes to consecutive blocks of blocktype.
+    pub fn append_stream(&mut self, user_type: U) -> Result<impl BlockWrite + Write + '_, Error> {
+        if !user_type.is_stream() {
+            return Err(Error::err(FBErrorKind::NotAStream(user_type.block_type())));
+        }
+        self.alloc
+            .append_stream(user_type.block_type(), user_type.align())
     }
 }
 
@@ -209,6 +227,7 @@ where
         s.field("header", &self.alloc.header());
         s.field("types", &UserTypes::<U>(self.alloc.types(), PhantomData));
         s.field("physical", &self.alloc.physical());
+        s.field("streams", &self.alloc.streams());
         s.finish()?;
 
         f.debug_list().entries(self.alloc.iter_blocks()).finish()

@@ -16,6 +16,7 @@ pub enum BlockType {
     Header = 2,
     Types = 3,
     Physical = 4,
+    Streams = 5,
 
     User1 = 16,
     User2 = 17,
@@ -48,6 +49,10 @@ impl UserBlockType for BlockType {
         // basic data blocks are byte-arrays.
         align_of::<[u8; 0]>()
     }
+
+    fn is_stream(self) -> bool {
+        true
+    }
 }
 
 impl Display for BlockType {
@@ -65,6 +70,7 @@ impl Debug for BlockType {
             BlockType::Header => "BHD",
             BlockType::Types => "BTY",
             BlockType::Physical => "BPH",
+            BlockType::Streams => "BST",
 
             BlockType::User1 => "U01",
             BlockType::User2 => "U02",
@@ -96,6 +102,7 @@ impl TryFrom<u32> for BlockType {
             2 => Ok(BlockType::Header),
             3 => Ok(BlockType::Types),
             4 => Ok(BlockType::Physical),
+            5 => Ok(BlockType::Streams),
 
             16 => Ok(BlockType::User1),
             17 => Ok(BlockType::User2),

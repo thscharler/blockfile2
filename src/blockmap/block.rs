@@ -238,14 +238,13 @@ impl Block {
 impl Debug for Block {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let width = f.width().unwrap_or(0);
-        writeln!(
-            f,
-            "[{}]={:?} {} {}",
-            self.block_nr,
-            self.block_type,
-            if self.dirty { "dirty " } else { "" },
-            if self.discard { "discard " } else { "" }
-        )?;
+        write!(f, "[{}]={:?}", self.block_nr, self.block_type)?;
+        if self.dirty {
+            write!(f, " dirty")?;
+        }
+        if self.discard {
+            write!(f, " discard")?;
+        }
         if width >= 1 {
             struct RefBlock<'a>(&'a [u8]);
             impl<'a> Debug for RefBlock<'a> {
@@ -282,6 +281,7 @@ impl Debug for Block {
                     Ok(())
                 }
             }
+            writeln!(f)?;
             writeln!(f, "{:?}", RefBlock(self.data.as_ref()))?;
         }
         Ok(())

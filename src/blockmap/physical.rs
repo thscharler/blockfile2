@@ -164,16 +164,6 @@ impl Physical {
     }
 
     /// Get the blockmap with this block-nr.
-    #[allow(dead_code)]
-    pub fn blockmap(&self, block_nr: LogicalNr) -> Result<&PhysicalBlock, Error> {
-        let find = self.blocks.iter().find(|v| v.block_nr() == block_nr);
-        match find {
-            Some(v) => Ok(v),
-            None => Err(Error::err(FBErrorKind::InvalidBlock(block_nr))),
-        }
-    }
-
-    /// Get the blockmap with this block-nr.
     pub fn blockmap_mut(&mut self, block_nr: LogicalNr) -> Result<&mut PhysicalBlock, Error> {
         let find = self.blocks.iter_mut().find(|v| v.block_nr() == block_nr);
         match find {

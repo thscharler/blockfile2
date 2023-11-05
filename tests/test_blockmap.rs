@@ -1,8 +1,9 @@
 use blockfile2::{
-    Alloc, BasicFileBlocks, BlockType, Error, FBErrorKind, LogicalNr, PhysicalNr, State,
-    UserBlockType,
+    Alloc, BasicFileBlocks, BlockType, BlockWrite, Error, FBErrorKind, LogicalNr, PhysicalNr,
+    State, UserBlockType,
 };
 use std::fs::File;
+use std::io::Write;
 use std::mem::{align_of, size_of};
 use std::panic::catch_unwind;
 use std::path::Path;
@@ -52,7 +53,8 @@ fn test_size() {
 
 #[test]
 fn test_init() {
-    let alloc = Alloc::init(BLOCK_SIZE);
+    let f = File::create("tmp/test_init.bin").expect("file");
+    let alloc = Alloc::init(f, BLOCK_SIZE);
 
     assert_eq!(alloc.header().stored_block_size(), BLOCK_SIZE);
     assert_eq!(alloc.header().block_nr(), LogicalNr(0));
@@ -83,13 +85,12 @@ fn test_init() {
 
 #[test]
 fn test_1() -> Result<(), Error> {
-    let mut f = File::create("tmp/test1.bin").expect("file");
-    let mut alloc = Alloc::init(BLOCK_SIZE);
-    alloc.store(&mut f)?;
-    drop(f);
+    let f = File::create("tmp/test1.bin").expect("file");
+    let mut alloc = Alloc::init(f, BLOCK_SIZE);
+    alloc.store()?;
 
-    let mut f = File::open("tmp/test1.bin").expect("file");
-    let alloc = Alloc::load(&mut f, BLOCK_SIZE)?;
+    let f = File::open("tmp/test1.bin").expect("file");
+    let alloc = Alloc::load(f, BLOCK_SIZE)?;
 
     assert_eq!(alloc.header().low_types(), PhysicalNr(1));
     assert_eq!(alloc.header().low_physical(), PhysicalNr(2));
@@ -204,6 +205,30 @@ fn test_recover() -> Result<(), Error> {
         fb.block_type(LogicalNr(3)).expect("block_type"),
         BlockType::User1
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_stream_1() -> Result<(), Error> {
+    let mut fb = BasicFileBlocks::create(&Path::new("tmp/stream_1.bin"), BLOCK_SIZE)?;
+
+    dbg!(fb.streams());
+
+    let mut ws = fb.append_stream(BlockType::User1)?;
+    ws.write("small_string".as_bytes()).expect("");
+    ws.write("other_string".as_bytes()).expect("");
+    drop(ws);
+
+    dbg!(fb.streams());
+
+    fb.store()?;
+
+    dbg!(&fb);
+
+    let fb = BasicFileBlocks::load(&Path::new("tmp/stream_1.bin"), BLOCK_SIZE)?;
+
+    dbg!(&fb);
 
     Ok(())
 }

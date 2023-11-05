@@ -1,38 +1,47 @@
-use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr};
+use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fs::File;
+use std::io::{Read, Write};
 
 mod block;
 pub(crate) mod block_io;
 mod blocktype;
 mod header;
 mod physical;
+mod stream;
 mod types;
 
-use crate::blockmap::physical::Physical;
-use crate::blockmap::types::Types;
+use physical::Physical;
+use types::Types;
 
 pub use block::Block;
 pub use blocktype::BlockType;
 pub use header::{HeaderBlock, State};
 pub use physical::PhysicalBlock;
+pub use stream::StreamsBlock;
 pub use types::TypesBlock;
-
 pub(crate) use types::UserTypes;
 
 pub const _INIT_HEADER_NR: LogicalNr = LogicalNr(0);
 pub const _INIT_TYPES_NR: LogicalNr = LogicalNr(1);
 pub const _INIT_PHYSICAL_NR: LogicalNr = LogicalNr(2);
+pub const _INIT_STREAM_NR: LogicalNr = LogicalNr(3);
 
 /// Manages allocations and block-buffers.
 #[derive(Debug)]
 pub struct Alloc {
+    file: File,
     block_size: usize,
+
     header: HeaderBlock,
     types: Types,
     physical: Physical,
+    streams: StreamsBlock,
+
+    // block cache
     user: BTreeMap<LogicalNr, Block>,
+
     generation: u32,
     #[cfg(debug_assertions)]
     store_panic: u32,
@@ -40,16 +49,19 @@ pub struct Alloc {
 
 impl Alloc {
     /// Init a new Allocator.
-    pub fn init(block_size: usize) -> Self {
+    pub fn init(file: File, block_size: usize) -> Self {
         let header = HeaderBlock::init(block_size);
         let types = Types::init(block_size);
         let physical = Physical::init(block_size);
+        let streams = StreamsBlock::init(block_size);
 
         let s = Self {
+            file,
             block_size,
             header,
             types,
             physical,
+            streams,
             user: Default::default(),
             generation: 0,
             #[cfg(debug_assertions)]
@@ -61,9 +73,9 @@ impl Alloc {
     }
 
     /// Load from file.
-    pub fn load(file: &mut File, block_size: usize) -> Result<Self, Error> {
+    pub fn load(mut file: File, block_size: usize) -> Result<Self, Error> {
         let mut header = HeaderBlock::new(block_size);
-        block_io::load_raw_0(file, &mut header.0)?;
+        block_io::load_raw_0(&mut file, &mut header.0)?;
 
         // load physical map
         let physical_pnr = match header.state() {
@@ -73,7 +85,7 @@ impl Alloc {
         if physical_pnr == 0 {
             return Err(Error::err(FBErrorKind::HeaderCorrupted));
         }
-        let physical = Physical::load(file, block_size, physical_pnr)?;
+        let physical = Physical::load(&mut file, block_size, physical_pnr)?;
 
         // load type map
         let types_pnr = match header.state() {
@@ -83,13 +95,28 @@ impl Alloc {
         if types_pnr == 0 {
             return Err(Error::err(FBErrorKind::HeaderCorrupted));
         }
-        let types = Types::load(file, &physical, block_size, types_pnr)?;
+        let types = Types::load(&mut file, &physical, block_size, types_pnr)?;
+
+        // load streams
+        let streams_pnr = match header.state() {
+            State::Low => header.low_streams(),
+            State::High => header.high_streams(),
+        };
+        let streams = if streams_pnr != 0 {
+            let mut streams = StreamsBlock::new(block_size);
+            block_io::load_raw(&mut file, streams_pnr, &mut streams.0)?;
+            streams
+        } else {
+            StreamsBlock::init(block_size)
+        };
 
         let s = Self {
+            file,
             block_size,
             header,
             types,
             physical,
+            streams,
             user: Default::default(),
             generation: 0,
             #[cfg(debug_assertions)]
@@ -109,13 +136,13 @@ impl Alloc {
     }
 
     /// Store to file.
-    pub fn store(&mut self, file: &mut File) -> Result<(), Error> {
+    pub fn store(&mut self) -> Result<(), Error> {
         self.generation += 1;
 
-        if block_io::metadata(file)?.len() == 0 {
+        if block_io::metadata(&mut self.file)?.len() == 0 {
             // Write default header.
             let default = HeaderBlock::init(self.block_size);
-            block_io::store_raw(file, PhysicalNr(0), &default.0)?;
+            block_io::store_raw(&mut self.file, PhysicalNr(0), &default.0)?;
         }
 
         #[cfg(debug_assertions)]
@@ -129,7 +156,7 @@ impl Alloc {
                 let new_pnr = self.physical.pop_free();
                 self.physical.set_physical_nr(*block_nr, new_pnr)?;
 
-                block_io::store_raw(file, new_pnr, block)?;
+                block_io::store_raw(&mut self.file, new_pnr, block)?;
                 block.set_dirty(false);
                 block.set_generation(self.generation);
             }
@@ -138,6 +165,21 @@ impl Alloc {
         #[cfg(debug_assertions)]
         if self.store_panic == 2 {
             panic!("invoke store_panic 2");
+        }
+
+        if self.streams.is_dirty() {
+            let new_pnr = self.physical.pop_free();
+            self.physical
+                .set_physical_nr(self.streams.block_nr(), new_pnr)?;
+
+            block_io::store_raw(&mut self.file, new_pnr, &self.streams.0)?;
+            self.streams.set_dirty(false);
+            self.streams.0.set_generation(self.generation);
+        }
+
+        #[cfg(debug_assertions)]
+        if self.store_panic == 3 {
+            panic!("invoke store_panic 3");
         }
 
         // write block-types.
@@ -149,15 +191,15 @@ impl Alloc {
                 self.physical.set_physical_nr(block_nr, new_pnr)?;
 
                 let block = self.types.blockmap_mut(block_nr)?;
-                block_io::store_raw(file, new_pnr, &block.0)?;
+                block_io::store_raw(&mut self.file, new_pnr, &block.0)?;
                 block.set_dirty(false);
                 block.0.set_generation(self.generation);
             }
         }
 
         #[cfg(debug_assertions)]
-        if self.store_panic == 3 {
-            panic!("invoke store_panic 3");
+        if self.store_panic == 4 {
+            panic!("invoke store_panic 4");
         }
 
         // assign physical block to physical block-maps before writing any of them.
@@ -172,8 +214,8 @@ impl Alloc {
         }
 
         #[cfg(debug_assertions)]
-        if self.store_panic == 4 {
-            panic!("invoke store_panic 4");
+        if self.store_panic == 5 {
+            panic!("invoke store_panic 5");
         }
 
         // writing the physical maps is the last thing. now every block
@@ -184,54 +226,55 @@ impl Alloc {
 
             if is_dirty {
                 let block = self.physical.blockmap_mut(block_nr)?;
-                block_io::store_raw(file, block_pnr, &block.0)?;
+                block_io::store_raw(&mut self.file, block_pnr, &block.0)?;
                 block.set_dirty(false);
                 block.0.set_generation(self.generation);
             }
         }
 
         #[cfg(debug_assertions)]
-        if self.store_panic == 5 {
-            panic!("invoke store_panic 5");
+        if self.store_panic == 6 {
+            panic!("invoke store_panic 6");
         }
 
         // write root blocks
         let block_1_pnr = self.physical.physical_nr(_INIT_TYPES_NR)?;
         let block_2_pnr = self.physical.physical_nr(_INIT_PHYSICAL_NR)?;
+        let block_3_pnr = self.physical.physical_nr(_INIT_STREAM_NR)?;
 
         // flip state.
         match self.header.state() {
             State::Low => {
-                self.header.store_high_types(file, block_1_pnr)?;
-                self.header.store_high_physical(file, block_2_pnr)?;
-                block_io::sync(file)?;
+                self.header
+                    .store_high(&mut self.file, block_1_pnr, block_2_pnr, block_3_pnr)?;
+                block_io::sync(&mut self.file)?;
 
                 #[cfg(debug_assertions)]
-                if self.store_panic == 6 {
-                    panic!("invoke store_panic 6");
+                if self.store_panic == 7 {
+                    panic!("invoke store_panic 7");
                 }
 
-                self.header.store_state(file, State::High)?;
-                block_io::sync(file)?;
+                self.header.store_state(&mut self.file, State::High)?;
+                block_io::sync(&mut self.file)?;
             }
             State::High => {
-                self.header.store_low_types(file, block_1_pnr)?;
-                self.header.store_low_physical(file, block_2_pnr)?;
-                block_io::sync(file)?;
+                self.header
+                    .store_low(&mut self.file, block_1_pnr, block_2_pnr, block_3_pnr)?;
+                block_io::sync(&mut self.file)?;
 
                 #[cfg(debug_assertions)]
-                if self.store_panic == 6 {
-                    panic!("invoke store_panic 6");
+                if self.store_panic == 8 {
+                    panic!("invoke store_panic 8");
                 }
 
-                self.header.store_state(file, State::Low)?;
-                block_io::sync(file)?;
+                self.header.store_state(&mut self.file, State::Low)?;
+                block_io::sync(&mut self.file)?;
             }
         }
 
         #[cfg(debug_assertions)]
-        if self.store_panic == 7 {
-            panic!("invoke store_panic 7");
+        if self.store_panic == 9 {
+            panic!("invoke store_panic 9");
         }
 
         // Rebuild the list of free physical pages.
@@ -323,6 +366,11 @@ impl Alloc {
         &self.header
     }
 
+    /// Streams data.
+    pub fn streams(&self) -> &StreamsBlock {
+        &self.streams
+    }
+
     /// For debug output only.
     pub(crate) fn types(&self) -> &Types {
         &self.types
@@ -344,8 +392,14 @@ impl Alloc {
     }
 
     /// Metadata
-    pub fn iter_metadata(&self) -> impl Iterator<Item = (LogicalNr, BlockType)> {
-        self.types.iter_block_type()
+    pub fn iter_metadata<F>(
+        &self,
+        filter: &F,
+    ) -> impl Iterator<Item = (LogicalNr, BlockType)> + DoubleEndedIterator
+    where
+        F: Fn(LogicalNr, BlockType) -> bool,
+    {
+        self.types.iter_block_type(filter)
     }
 
     /// Store generation.
@@ -397,36 +451,44 @@ impl Alloc {
     }
 
     /// Free user-block cache.
-    pub fn retain_blocks<F>(&mut self, f: F)
+    pub fn retain_blocks<F>(&mut self, mut f: F)
     where
         F: FnMut(&LogicalNr, &mut Block) -> bool,
     {
-        self.user.retain(f);
+        // don't allow the outside world to fuck up our data.
+        self.user.retain(move |k, v| match v.block_type() {
+            BlockType::NotAllocated => false,
+            BlockType::Free => false,
+            BlockType::Header => true,
+            BlockType::Types => true,
+            BlockType::Physical => true,
+            BlockType::Streams => true,
+            _ => f(k, v),
+        });
+    }
+
+    /// Returns the alignment for the block.
+    pub fn block_align<U: UserBlockType>(&self, block_nr: LogicalNr) -> Result<usize, Error> {
+        let block_type = self.block_type(block_nr)?;
+        let Some(user_block_type) = U::user_type(block_type) else {
+            return Err(Error::err(FBErrorKind::NoUserBlockType(block_type)));
+        };
+        Ok(U::align(user_block_type))
     }
 
     /// Returns the block.
-    pub fn get_block(
-        &mut self,
-        file: &mut File,
-        block_nr: LogicalNr,
-        align: usize,
-    ) -> Result<&Block, Error> {
+    pub fn block(&mut self, block_nr: LogicalNr, align: usize) -> Result<&Block, Error> {
         if !self.user.contains_key(&block_nr) {
-            self.load_block(file, block_nr, align)?;
+            self.load_block(block_nr, align)?;
         }
 
         Ok(self.user.get(&block_nr).expect("user-block"))
     }
 
     /// Returns the block.
-    pub fn get_block_mut(
-        &mut self,
-        file: &mut File,
-        block_nr: LogicalNr,
-        align: usize,
-    ) -> Result<&mut Block, Error> {
+    pub fn block_mut(&mut self, block_nr: LogicalNr, align: usize) -> Result<&'_ mut Block, Error> {
         if !self.user.contains_key(&block_nr) {
-            self.load_block(file, block_nr, align)?;
+            self.load_block(block_nr, align)?;
         }
 
         Ok(self.user.get_mut(&block_nr).expect("user-block"))
@@ -434,12 +496,7 @@ impl Alloc {
 
     /// Load a block and inserts it into the block-cache.
     /// Reloads the block unconditionally.
-    pub fn load_block(
-        &mut self,
-        file: &mut File,
-        block_nr: LogicalNr,
-        align: usize,
-    ) -> Result<(), Error> {
+    pub fn load_block(&mut self, block_nr: LogicalNr, align: usize) -> Result<(), Error> {
         let block_type = self.types.block_type(block_nr)?;
         let block_pnr = match block_type {
             BlockType::NotAllocated => {
@@ -454,12 +511,75 @@ impl Alloc {
 
         let mut block = Block::new(block_nr, self.block_size, align, block_type);
         if block_pnr != 0 {
-            block_io::load_raw(file, block_pnr, &mut block)?;
+            block_io::load_raw(&mut self.file, block_pnr, &mut block)?;
         }
 
         self.user.insert(block_nr, block);
 
         Ok(())
+    }
+
+    /// Returns the stored last position of the stream as a index into the last
+    /// allocated block.  
+    ///
+    /// Returns 0 if no current position is stored.
+    pub fn stream_head_idx(&mut self, block_type: BlockType) -> usize {
+        self.streams.head_idx(block_type)
+    }
+
+    /// Set the stream head-idx for a stream.
+    pub fn set_stream_head_idx(&mut self, block_type: BlockType, idx: usize) -> Result<(), Error> {
+        self.streams.set_head_idx(block_type, idx)
+    }
+
+    /// Get a Reader that reads the contents of one BlockType in order.
+    pub fn read_stream(
+        &mut self,
+        block_type: BlockType,
+        block_align: usize,
+    ) -> Result<impl Read + '_, Error> {
+        let block_nrs: Vec<_> = self
+            .iter_metadata(&|nr, ty| ty == block_type)
+            .map(|(nr, _ty)| nr)
+            .collect();
+        let head_idx = self.stream_head_idx(block_type);
+
+        Ok(BlockReader {
+            alloc: self,
+            block_type,
+            block_align,
+            head_idx,
+            block_nrs,
+            block_idx: 0,
+            data_idx: 0,
+        })
+    }
+
+    /// Get a Writer that writes to consecutive blocks of blocktype.
+    pub fn append_stream(
+        &mut self,
+        block_type: BlockType,
+        block_align: usize,
+    ) -> Result<impl BlockWrite + Write + '_, Error> {
+        let block_nr = self
+            .iter_metadata(&|_nr, ty| ty == block_type)
+            .rev()
+            .map(|(nr, _ty)| nr)
+            .next();
+        let block_nr = if let Some(block_nr) = block_nr {
+            block_nr
+        } else {
+            self.alloc_block(block_type, block_align)?
+        };
+        let head_idx = self.stream_head_idx(block_type);
+
+        Ok(BlockWriter {
+            alloc: self,
+            block_type,
+            block_align,
+            block_nr,
+            head_idx,
+        })
     }
 
     /// Get the block-type for a block-nr.
@@ -471,5 +591,177 @@ impl Alloc {
     #[allow(dead_code)]
     pub fn physical_nr(&self, logical: LogicalNr) -> Result<PhysicalNr, Error> {
         self.physical.physical_nr(logical)
+    }
+}
+
+pub trait BlockWrite: Write {
+    // Curent write block-nr.
+    fn block_nr(&self) -> LogicalNr;
+    // Current write idx.
+    fn idx(&self) -> usize;
+}
+
+struct BlockWriter<'a> {
+    alloc: &'a mut Alloc,
+    block_type: BlockType,
+    block_align: usize,
+
+    block_nr: LogicalNr,
+    head_idx: usize,
+}
+
+impl<'a> BlockWrite for BlockWriter<'a> {
+    fn block_nr(&self) -> LogicalNr {
+        self.block_nr
+    }
+
+    fn idx(&self) -> usize {
+        self.head_idx
+    }
+}
+
+impl<'a> Write for BlockWriter<'a> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let block_size = self.alloc.block_size();
+        let block_align = self.block_align;
+        let block_type = self.block_type;
+        dbg!(block_size);
+
+        let mut from = buf;
+        let mut block_nr = self.block_nr;
+        let mut head_idx = self.head_idx;
+
+        // fits or write prefix
+        let mut block = self.alloc.block_mut(block_nr, block_align)?;
+        let part = &mut block.data[head_idx..block_size];
+        if dbg!(part.len() >= from.len()) {
+            part[0..from.len()].copy_from_slice(from);
+            // block_nr = block_nr; // block_nr is still the same.
+            head_idx += from.len();
+            from = &from[from.len()..];
+        } else {
+            part.copy_from_slice(&from[0..part.len()]);
+            // block_nr = block_nr; // block_nr is still the same.
+            head_idx += part.len();
+            from = &from[part.len()..];
+        }
+
+        dbg!(555);
+
+        // write whole blocks
+        while from.len() > block_size {
+            block_nr = self.alloc.alloc_block(block_type, block_align)?;
+            block = self.alloc.block_mut(block_nr, block_align)?;
+            block.set_dirty(true);
+
+            dbg!(block_nr);
+
+            block.data.copy_from_slice(&from[0..block_size]);
+
+            // block_nr = block_nr; // block_nr already changed.
+            head_idx = block_size;
+            from = &from[block_size..];
+        }
+
+        // remainder
+        if from.len() > 0 {
+            block_nr = self.alloc.alloc_block(block_type, block_align)?;
+            block = self.alloc.block_mut(block_nr, block_align)?;
+            block.set_dirty(true);
+
+            dbg!(block_nr);
+
+            block.data[0..from.len()].copy_from_slice(from);
+
+            // block_nr = block_nr; // block_nr already changed.
+            head_idx += from.len();
+            from = &from[from.len()..];
+        }
+
+        // persist state
+        self.block_nr = block_nr;
+        self.head_idx = head_idx;
+        self.alloc
+            .streams
+            .set_head_idx(self.block_type, self.head_idx)?;
+
+        dbg!(self.block_nr, self.head_idx);
+
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+struct BlockReader<'a> {
+    alloc: &'a mut Alloc,
+    block_type: BlockType,
+    block_align: usize,
+
+    head_idx: usize,
+
+    block_nrs: Vec<LogicalNr>,
+    block_idx: usize,
+    data_idx: usize,
+}
+
+fn max_read_size(
+    block_nrs: &Vec<LogicalNr>,
+    block_idx: usize,
+    head_idx: usize,
+    block_size: usize,
+) -> usize {
+    if block_idx + 1 == block_nrs.len() {
+        head_idx
+    } else {
+        block_size
+    }
+}
+
+impl<'a> Read for BlockReader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let block_size = self.alloc.block_size();
+        let block_align = self.block_align;
+
+        let head_idx = self.head_idx;
+        let block_nrs = &self.block_nrs;
+        let mut block_idx = self.block_idx;
+        let mut data_idx = self.data_idx;
+
+        // get block
+        let mut block = self.alloc.block(block_nrs[block_idx], block_align)?;
+        let mut logical_block_size = max_read_size(block_nrs, block_idx, head_idx, block_size);
+
+        // next block needed?
+        if data_idx == logical_block_size {
+            if block_idx + 1 < block_nrs.len() {
+                block_idx += 1;
+
+                block = self.alloc.block(self.block_nrs[block_idx], block_align)?;
+                logical_block_size = max_read_size(block_nrs, block_idx, head_idx, block_size);
+            } else {
+                return Ok(0);
+            }
+        }
+
+        // copy data and forward
+        let part = &block.data[data_idx..logical_block_size];
+        let n = if part.len() >= buf.len() {
+            buf.copy_from_slice(&part[..buf.len()]);
+            data_idx += buf.len();
+            buf.len()
+        } else {
+            buf[0..part.len()].copy_from_slice(part);
+            data_idx += part.len();
+            part.len()
+        };
+
+        // write back state
+        self.block_idx = block_idx;
+        self.data_idx = data_idx;
+
+        Ok(n)
     }
 }

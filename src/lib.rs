@@ -1,13 +1,17 @@
 use std::backtrace::Backtrace;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
-use std::io;
+use std::io::ErrorKind;
 use std::ops::{Add, AddAssign, Sub};
+use std::{io, mem};
 
 mod blockmap;
 mod fileblocks;
 
-pub use crate::blockmap::{Alloc, Block, BlockType, HeaderBlock, PhysicalBlock, State, TypesBlock};
+pub use crate::blockmap::{
+    Alloc, Block, BlockType, BlockWrite, HeaderBlock, PhysicalBlock, State, StreamsBlock,
+    TypesBlock,
+};
 pub use crate::fileblocks::{BasicFileBlocks, FileBlocks};
 
 /// User defined mapping of block-types.
@@ -20,6 +24,11 @@ pub trait UserBlockType: Copy {
 
     /// Memory alignment for a user block-type.
     fn align(self) -> usize;
+
+    /// Stream this blocktype.
+    fn is_stream(self) -> bool {
+        false
+    }
 }
 
 /// Newtype for physical block-nr.
@@ -145,23 +154,23 @@ impl PartialOrd<u32> for LogicalNr {
 }
 
 /// Error types.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum FBErrorKind {
     /// Seek failed. IO error.
-    SeekBlock(PhysicalNr),
+    SeekBlock(PhysicalNr, io::Error),
     /// Storing a block failed. IO error.
-    StoreRaw(LogicalNr, PhysicalNr),
+    StoreRaw(LogicalNr, PhysicalNr, io::Error),
     /// Loading a block PhysicalNr. IO error.
-    LoadRaw(LogicalNr, PhysicalNr),
+    LoadRaw(LogicalNr, PhysicalNr, io::Error),
     /// Seek failed. IO error.
-    SubSeekBlock(PhysicalNr),
+    SubSeekBlock(PhysicalNr, io::Error),
     /// Storing a block failed. IO error.
-    SubStoreRaw(PhysicalNr),
+    SubStoreRaw(PhysicalNr, io::Error),
     /// Sync failed. IO error.
-    Sync,
+    Sync(io::Error),
     /// Metadata failed. IO error.
-    Metadata,
+    Metadata(io::Error),
     /// Cannot create the file.
     Create,
     /// Cannot open the file.
@@ -177,6 +186,10 @@ pub enum FBErrorKind {
     NoBlockMap,
     /// No mapping to a user block-type exists.
     NoUserBlockType(BlockType),
+    /// Maximum number of streams exceeded.
+    MaxStreams(usize),
+    /// Not a stream block-type
+    NotAStream(BlockType),
 
     /// Not a known block-nr.
     InvalidBlock(LogicalNr),
@@ -190,10 +203,106 @@ pub enum FBErrorKind {
     HeaderCorrupted,
 }
 
+impl PartialEq for FBErrorKind {
+    fn eq(&self, other: &Self) -> bool {
+        if mem::discriminant(self) != mem::discriminant(other) {
+            return false;
+        }
+        match self {
+            FBErrorKind::SeekBlock(pnr, _) => {
+                let FBErrorKind::SeekBlock(o_pnr, _) = other else {
+                    unreachable!()
+                };
+                pnr == o_pnr
+            }
+            FBErrorKind::StoreRaw(nr, pnr, _) => {
+                let FBErrorKind::StoreRaw(o_nr, o_pnr, _) = other else {
+                    unreachable!()
+                };
+                nr == o_nr && pnr == o_pnr
+            }
+            FBErrorKind::LoadRaw(nr, pnr, _) => {
+                let FBErrorKind::LoadRaw(o_nr, o_pnr, _) = other else {
+                    unreachable!()
+                };
+                nr == o_nr && pnr == o_pnr
+            }
+            FBErrorKind::SubSeekBlock(pnr, _) => {
+                let FBErrorKind::SubSeekBlock(o_pnr, _) = other else {
+                    unreachable!()
+                };
+                pnr == o_pnr
+            }
+            FBErrorKind::SubStoreRaw(pnr, _) => {
+                let FBErrorKind::SubStoreRaw(o_pnr, _) = other else {
+                    unreachable!()
+                };
+                pnr == o_pnr
+            }
+            FBErrorKind::NotAllocated(nr) => {
+                let FBErrorKind::NotAllocated(o_nr) = other else {
+                    unreachable!()
+                };
+                nr == o_nr
+            }
+            FBErrorKind::AccessDenied(nr) => {
+                let FBErrorKind::AccessDenied(o_nr) = other else {
+                    unreachable!()
+                };
+                nr == o_nr
+            }
+            FBErrorKind::NoUserBlockType(ty) => {
+                let FBErrorKind::NoUserBlockType(o_ty) = other else {
+                    unreachable!()
+                };
+                ty == o_ty
+            }
+            FBErrorKind::MaxStreams(v) => {
+                let FBErrorKind::MaxStreams(o_v) = other else {
+                    unreachable!()
+                };
+                v == o_v
+            }
+            FBErrorKind::NotAStream(ty) => {
+                let FBErrorKind::NotAStream(o_ty) = other else {
+                    unreachable!()
+                };
+                ty == o_ty
+            }
+            FBErrorKind::InvalidBlock(nr) => {
+                let FBErrorKind::InvalidBlock(o_nr) = other else {
+                    unreachable!()
+                };
+                nr == o_nr
+            }
+            FBErrorKind::InvalidBlockSize(sz) => {
+                let FBErrorKind::InvalidBlockSize(o_sz) = other else {
+                    unreachable!()
+                };
+                sz == o_sz
+            }
+            FBErrorKind::NoBlockType(nr) => {
+                let FBErrorKind::NoBlockType(o_nr) = other else {
+                    unreachable!()
+                };
+                nr == o_nr
+            }
+            FBErrorKind::InvalidBlockType(nr, ty) => {
+                let FBErrorKind::InvalidBlockType(o_nr, o_ty) = other else {
+                    unreachable!()
+                };
+                nr == o_nr && ty == o_ty
+            }
+            _ => {
+                unreachable!()
+            }
+        }
+    }
+}
+
 /// Error.
 pub struct Error {
     pub kind: FBErrorKind,
-    pub io: io::ErrorKind,
     pub backtrace: Backtrace,
 }
 
@@ -201,7 +310,6 @@ impl Error {
     pub fn err(kind: FBErrorKind) -> Self {
         Self {
             kind,
-            io: io::ErrorKind::Other,
             backtrace: Backtrace::capture(),
         }
     }
@@ -209,7 +317,7 @@ impl Error {
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} {:?} {:?}", self.kind, self.io, self.backtrace)
+        writeln!(f, "{:?} {}", self.kind, self.backtrace)
     }
 }
 
@@ -217,18 +325,16 @@ impl Debug for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut s = f.debug_struct("blockfile::Error");
         s.field("kind", &self.kind);
-        s.field("io", &self.io);
         s.finish()?;
-        write!(f, "{:#?}", self.backtrace)?;
+        writeln!(f, "{}", self.backtrace)?;
         Ok(())
     }
 }
 
-/// Helper trait to get the LEN for an array type (instead len() for a array *value*).
-pub trait Length {
-    const LEN: usize;
-}
+impl std::error::Error for Error {}
 
-impl<T, const LENGTH: usize> Length for [T; LENGTH] {
-    const LEN: usize = LENGTH;
+impl From<Error> for io::Error {
+    fn from(value: Error) -> Self {
+        io::Error::new(ErrorKind::Other, value)
+    }
 }
