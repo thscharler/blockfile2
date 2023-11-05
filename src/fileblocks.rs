@@ -5,7 +5,7 @@ use crate::{
 };
 use std::fmt::{Debug, Formatter};
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::marker::PhantomData;
 use std::path::Path;
 
