@@ -3,7 +3,7 @@ use crate::blockmap::physical::Physical;
 use crate::blockmap::{
     block_io, BlockType, _INIT_HEADER_NR, _INIT_PHYSICAL_NR, _INIT_STREAM_NR, _INIT_TYPES_NR,
 };
-use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
+use crate::{user_type_string, Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::marker::PhantomData;
@@ -561,15 +561,5 @@ where
         }
 
         Ok(())
-    }
-}
-
-fn user_type_string<U>(block_type: BlockType) -> String
-where
-    U: UserBlockType + Debug,
-{
-    match U::user_type(block_type) {
-        Some(v) => format!("{:?}", v).to_string(),
-        None => format!("{:?}", block_type).to_string(),
     }
 }

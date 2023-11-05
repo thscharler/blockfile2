@@ -20,6 +20,7 @@ pub use blocktype::BlockType;
 pub use header::{HeaderBlock, State};
 pub use physical::PhysicalBlock;
 pub use stream::StreamsBlock;
+pub(crate) use stream::UserStreamsBlock;
 pub use types::TypesBlock;
 pub(crate) use types::UserTypes;
 
@@ -565,10 +566,14 @@ impl Alloc {
             .rev()
             .map(|(nr, _ty)| nr)
             .next();
+
         let block_nr = if let Some(block_nr) = block_nr {
             block_nr
         } else {
-            self.alloc_block(block_type, block_align)?
+            let block_nr = self.alloc_block(block_type, block_align)?;
+            let block = self.block_mut(block_nr, block_align)?;
+            block.set_dirty(true);
+            block_nr
         };
         let head_idx = self.stream_head_idx(block_type);
 
@@ -631,7 +636,7 @@ impl<'a> Write for BlockWriter<'a> {
         let n = if buf.len() == 0 {
             // noop
             0
-        } else if dbg!(block_size - write_head >= buf.len()) {
+        } else if block_size - write_head >= buf.len() {
             // easy fit
             // block_nr = block_nr;
 
@@ -642,7 +647,7 @@ impl<'a> Write for BlockWriter<'a> {
             write_head += buf.len();
 
             buf.len()
-        } else if dbg!(block_size - write_head > 0) {
+        } else if block_size - write_head > 0 {
             // some space left
             // block_nr = block_nr;
 
@@ -653,7 +658,7 @@ impl<'a> Write for BlockWriter<'a> {
             write_head += part.len();
 
             part.len()
-        } else if dbg!(block_size >= buf.len()) {
+        } else if block_size >= buf.len() {
             // allocate and write complete buffer.
             block_nr = self.alloc.alloc_block(block_type, block_align)?;
             // write_head = 0;
@@ -666,7 +671,7 @@ impl<'a> Write for BlockWriter<'a> {
             write_head = buf.len();
 
             buf.len()
-        } else if dbg!(block_size < buf.len()) {
+        } else if block_size < buf.len() {
             // allocate and write whole block
             block_nr = self.alloc.alloc_block(block_type, block_align)?;
             // write_head = 0;

@@ -1,9 +1,10 @@
 use crate::blockmap::_INIT_STREAM_NR;
-use crate::{Block, BlockType, Error, FBErrorKind, LogicalNr};
+use crate::{user_type_string, Block, BlockType, Error, FBErrorKind, LogicalNr, UserBlockType};
+use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::mem::align_of;
 
 /// Contains the end-idx into the last block of a data-stream.
-#[derive(Debug)]
 pub struct StreamsBlock(pub(crate) Block);
 
 #[repr(C)]
@@ -70,7 +71,7 @@ impl StreamsBlock {
     /// allocated block.  
     ///
     /// Returns 0 if no current position is stored.
-    pub fn head_idx(&mut self, block_type: BlockType) -> usize {
+    pub fn head_idx(&self, block_type: BlockType) -> usize {
         let data = self.data();
         for i in 0..data.len() {
             if data[i].block_type == block_type {
@@ -91,5 +92,53 @@ impl StreamsBlock {
     /// View over the block-data.
     fn data(&self) -> &[StreamIdx] {
         self.0.cast_array()
+    }
+}
+
+impl Debug for StreamsBlock {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", UserStreamsBlock::<BlockType>(self, PhantomData))
+    }
+}
+
+/// Wrapper around UserTypes to get the UserBlockTypes for debug output.
+pub(crate) struct UserStreamsBlock<'a, U>(pub &'a StreamsBlock, pub PhantomData<U>);
+
+impl<'a, U> Debug for UserStreamsBlock<'a, U>
+where
+    U: UserBlockType + Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mut s = f.debug_struct("StreamsBlock");
+        s.field("0", &self.0 .0);
+        s.field("streams", &RefStreams::<U>(self.0.data(), PhantomData::<U>));
+        s.finish()?;
+
+        struct RefStreams<'a, U>(&'a [StreamIdx], PhantomData<U>);
+        impl<'a, U> Debug for RefStreams<'a, U>
+        where
+            U: UserBlockType + Debug,
+        {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                for r in 0..(self.0.len() + 8) / 8 {
+                    writeln!(f)?;
+                    for c in 0..8 {
+                        let i = r * 8 + c;
+
+                        if i < self.0.len() && self.0[i].block_type != BlockType::NotAllocated {
+                            write!(
+                                f,
+                                "{:4?}:{:8} ",
+                                user_type_string::<U>(self.0[i].block_type),
+                                self.0[i].idx
+                            )?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+        }
+
+        Ok(())
     }
 }

@@ -1,4 +1,4 @@
-use crate::blockmap::{block_io, Alloc, UserTypes};
+use crate::blockmap::{block_io, Alloc, UserStreamsBlock, UserTypes};
 use crate::{
     Block, BlockType, BlockWrite, Error, FBErrorKind, HeaderBlock, LogicalNr, PhysicalBlock, State,
     StreamsBlock, TypesBlock, UserBlockType,
@@ -227,7 +227,10 @@ where
         s.field("header", &self.alloc.header());
         s.field("types", &UserTypes::<U>(self.alloc.types(), PhantomData));
         s.field("physical", &self.alloc.physical());
-        s.field("streams", &self.alloc.streams());
+        s.field(
+            "streams",
+            &UserStreamsBlock::<U>(self.alloc.streams(), PhantomData),
+        );
         s.finish()?;
 
         f.debug_list().entries(self.alloc.iter_blocks()).finish()

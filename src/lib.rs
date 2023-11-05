@@ -31,6 +31,17 @@ pub trait UserBlockType: Copy {
     }
 }
 
+/// Returns the string repr of the user-type or of block-type if there is no mapping.
+pub fn user_type_string<U>(block_type: BlockType) -> String
+where
+    U: UserBlockType + Debug,
+{
+    match U::user_type(block_type) {
+        Some(v) => format!("{:?}", v).to_string(),
+        None => format!("{:?}", block_type).to_string(),
+    }
+}
+
 /// Newtype for physical block-nr.
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

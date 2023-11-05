@@ -3,10 +3,11 @@ use blockfile2::{
     State, UserBlockType,
 };
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::mem::{align_of, size_of};
 use std::panic::catch_unwind;
 use std::path::Path;
+use std::str::from_utf8;
 
 const BLOCK_SIZE: usize = 128;
 
@@ -213,22 +214,55 @@ fn test_recover() -> Result<(), Error> {
 fn test_stream_1() -> Result<(), Error> {
     let mut fb = BasicFileBlocks::create(&Path::new("tmp/stream_1.bin"), BLOCK_SIZE)?;
 
-    dbg!(fb.streams());
-
     let mut ws = fb.append_stream(BlockType::User1)?;
     ws.write("small_string".as_bytes()).expect("");
     ws.write("other_string".as_bytes()).expect("");
     drop(ws);
 
-    dbg!(fb.streams());
+    dbg!(&fb);
+    fb.store()?;
+
+    // dbg!(&fb);
+
+    let mut fb = BasicFileBlocks::load(&Path::new("tmp/stream_1.bin"), BLOCK_SIZE)?;
+
+    assert_eq!(fb.streams().head_idx(BlockType::User1), 24);
+
+    let mut rd = fb.read_stream(BlockType::User1)?;
+    let mut buf = [0u8; 24];
+    rd.read_exact(&mut buf).expect("");
+    assert_eq!(from_utf8(&buf).expect("str"), "small_stringother_string");
+
+    Ok(())
+}
+
+#[test]
+fn test_stream_2() -> Result<(), Error> {
+    let mut fb = BasicFileBlocks::create(&Path::new("tmp/stream_2.bin"), BLOCK_SIZE)?;
+
+    let mut ws = fb.append_stream(BlockType::User1)?;
+    ws.write("small_string".as_bytes()).expect("");
+    ws.write_all(&[1u8; 3 * BLOCK_SIZE]).expect("");
+    ws.write("other_string".as_bytes()).expect("");
+    drop(ws);
 
     fb.store()?;
 
-    dbg!(&fb);
+    let mut fb = BasicFileBlocks::load(&Path::new("tmp/stream_2.bin"), BLOCK_SIZE)?;
 
-    let fb = BasicFileBlocks::load(&Path::new("tmp/stream_1.bin"), BLOCK_SIZE)?;
+    assert_eq!(fb.streams().head_idx(BlockType::User1), 24);
 
-    dbg!(&fb);
+    let mut rd = fb.read_stream(BlockType::User1)?;
+    let mut buf = [0u8; 12];
+    rd.read_exact(&mut buf).expect("");
+    assert_eq!(from_utf8(&buf).expect("str"), "small_string");
+
+    let mut buf = [1u8; 3 * BLOCK_SIZE];
+    rd.read_exact(&mut buf).expect("");
+
+    let mut buf = [0u8; 12];
+    rd.read_exact(&mut buf).expect("");
+    assert_eq!(from_utf8(&buf).expect("str"), "other_string");
 
     Ok(())
 }
