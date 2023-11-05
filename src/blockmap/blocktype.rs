@@ -8,7 +8,7 @@ use std::mem::align_of;
 /// Currently there are 16 defined values.
 #[non_exhaustive]
 #[repr(u32)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BlockType {
     NotAllocated = 0,
     Free = 1,

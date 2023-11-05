@@ -1,5 +1,5 @@
 use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::fs::File;
 use std::io;
@@ -457,16 +457,30 @@ impl Alloc {
     where
         F: FnMut(&LogicalNr, &mut Block) -> bool,
     {
+        let mut stats = HashMap::new();
+        let ref_stats = &mut stats;
+
         // don't allow the outside world to fuck up our data.
-        self.user.retain(move |k, v| match v.block_type() {
-            BlockType::NotAllocated => false,
-            BlockType::Free => false,
-            BlockType::Header => true,
-            BlockType::Types => true,
-            BlockType::Physical => true,
-            BlockType::Streams => true,
-            _ => f(k, v),
+        self.user.retain(move |k, v| {
+            let retain = match v.block_type() {
+                BlockType::NotAllocated => false,
+                BlockType::Free => false,
+                BlockType::Header => true,
+                BlockType::Types => true,
+                BlockType::Physical => true,
+                BlockType::Streams => true,
+                _ => f(k, v),
+            };
+
+            ref_stats
+                .entry(v.block_type())
+                .and_modify(|v| *v += 1u32)
+                .or_insert(1u32);
+
+            retain
         });
+
+        dbg!(stats);
     }
 
     /// Returns the alignment for the block.
@@ -574,6 +588,7 @@ impl Alloc {
             let block_nr = self.alloc_block(block_type, block_align)?;
             let block = self.block_mut(block_nr, block_align)?;
             block.set_dirty(true);
+            block.set_discard(true);
             block_nr
         };
         let head_idx = self.stream_head_idx(block_type);
@@ -668,6 +683,7 @@ impl<'a> Write for BlockWriter<'a> {
 
             let block = self.alloc.block_mut(block_nr, block_align)?;
             block.set_dirty(true);
+            block.set_discard(true);
             let part = &mut block.data[0..buf.len()];
             part.copy_from_slice(buf);
 
@@ -683,6 +699,7 @@ impl<'a> Write for BlockWriter<'a> {
 
             let block = self.alloc.block_mut(block_nr, block_align)?;
             block.set_dirty(true);
+            block.set_discard(true);
             let part = block.data.as_mut();
             part.copy_from_slice(&buf[0..block_size]);
 
@@ -791,6 +808,7 @@ impl<'a> Read for BlockReader<'a> {
             self.alloc.block(block_nrs[block_idx], block_align)?
         } else if data_idx == logical_block_size && block_idx + 1 < block_nrs.len() {
             // next block
+            self.alloc.discard_block(block_nrs[block_idx]);
             block_idx += 1;
             data_idx = 0;
             logical_block_size = max_read_size(block_nrs, block_idx, write_head, block_size);
@@ -798,6 +816,7 @@ impl<'a> Read for BlockReader<'a> {
             self.alloc.block(self.block_nrs[block_idx], block_align)?
         } else if data_idx == logical_block_size && block_idx + 1 == block_nrs.len() {
             // end of last
+            self.alloc.discard_block(block_nrs[block_idx]);
             return Ok(0);
         } else {
             unreachable!()
