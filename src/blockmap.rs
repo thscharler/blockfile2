@@ -457,30 +457,16 @@ impl Alloc {
     where
         F: FnMut(&LogicalNr, &mut Block) -> bool,
     {
-        let mut stats = HashMap::new();
-        let ref_stats = &mut stats;
-
         // don't allow the outside world to fuck up our data.
-        self.user.retain(move |k, v| {
-            let retain = match v.block_type() {
-                BlockType::NotAllocated => false,
-                BlockType::Free => false,
-                BlockType::Header => true,
-                BlockType::Types => true,
-                BlockType::Physical => true,
-                BlockType::Streams => true,
-                _ => f(k, v),
-            };
-
-            ref_stats
-                .entry(v.block_type())
-                .and_modify(|v| *v += 1u32)
-                .or_insert(1u32);
-
-            retain
+        self.user.retain(move |k, v| match v.block_type() {
+            BlockType::NotAllocated => false,
+            BlockType::Free => false,
+            BlockType::Header => true,
+            BlockType::Types => true,
+            BlockType::Physical => true,
+            BlockType::Streams => true,
+            _ => f(k, v),
         });
-
-        dbg!(stats);
     }
 
     /// Returns the alignment for the block.
