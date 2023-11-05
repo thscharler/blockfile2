@@ -539,16 +539,15 @@ impl Alloc {
         block_align: usize,
     ) -> Result<impl Read + '_, Error> {
         let block_nrs: Vec<_> = self
-            .iter_metadata(&|nr, ty| ty == block_type)
+            .iter_metadata(&|_nr, ty| ty == block_type)
             .map(|(nr, _ty)| nr)
             .collect();
         let head_idx = self.stream_head_idx(block_type);
 
         Ok(BlockReader {
             alloc: self,
-            block_type,
             block_align,
-            head_idx,
+            write_head: head_idx,
             block_nrs,
             block_idx: 0,
             data_idx: 0,
@@ -578,7 +577,7 @@ impl Alloc {
             block_type,
             block_align,
             block_nr,
-            head_idx,
+            write_head: head_idx,
         })
     }
 
@@ -607,7 +606,7 @@ struct BlockWriter<'a> {
     block_align: usize,
 
     block_nr: LogicalNr,
-    head_idx: usize,
+    write_head: usize,
 }
 
 impl<'a> BlockWrite for BlockWriter<'a> {
@@ -616,7 +615,7 @@ impl<'a> BlockWrite for BlockWriter<'a> {
     }
 
     fn idx(&self) -> usize {
-        self.head_idx
+        self.write_head
     }
 }
 
@@ -625,69 +624,75 @@ impl<'a> Write for BlockWriter<'a> {
         let block_size = self.alloc.block_size();
         let block_align = self.block_align;
         let block_type = self.block_type;
-        dbg!(block_size);
 
-        let mut from = buf;
         let mut block_nr = self.block_nr;
-        let mut head_idx = self.head_idx;
+        let mut write_head = self.write_head;
 
-        // fits or write prefix
-        let mut block = self.alloc.block_mut(block_nr, block_align)?;
-        let part = &mut block.data[head_idx..block_size];
-        if dbg!(part.len() >= from.len()) {
-            part[0..from.len()].copy_from_slice(from);
-            // block_nr = block_nr; // block_nr is still the same.
-            head_idx += from.len();
-            from = &from[from.len()..];
+        let n = if buf.len() == 0 {
+            // noop
+            0
+        } else if dbg!(block_size - write_head >= buf.len()) {
+            // easy fit
+            // block_nr = block_nr;
+
+            let block = self.alloc.block_mut(block_nr, block_align)?;
+            let part = &mut block.data[write_head..block_size];
+            part[0..buf.len()].copy_from_slice(buf);
+
+            write_head += buf.len();
+
+            buf.len()
+        } else if dbg!(block_size - write_head > 0) {
+            // some space left
+            // block_nr = block_nr;
+
+            let block = self.alloc.block_mut(block_nr, block_align)?;
+            let part = &mut block.data[write_head..block_size];
+            part.copy_from_slice(&buf[0..part.len()]);
+
+            write_head += part.len();
+
+            part.len()
+        } else if dbg!(block_size >= buf.len()) {
+            // allocate and write complete buffer.
+            block_nr = self.alloc.alloc_block(block_type, block_align)?;
+            // write_head = 0;
+
+            let block = self.alloc.block_mut(block_nr, block_align)?;
+            block.set_dirty(true);
+            let part = &mut block.data[0..buf.len()];
+            part.copy_from_slice(buf);
+
+            write_head = buf.len();
+
+            buf.len()
+        } else if dbg!(block_size < buf.len()) {
+            // allocate and write whole block
+            block_nr = self.alloc.alloc_block(block_type, block_align)?;
+            // write_head = 0;
+
+            let block = self.alloc.block_mut(block_nr, block_align)?;
+            block.set_dirty(true);
+            let part = block.data.as_mut();
+            part.copy_from_slice(&buf[0..block_size]);
+
+            write_head = block_size;
+
+            block_size
         } else {
-            part.copy_from_slice(&from[0..part.len()]);
-            // block_nr = block_nr; // block_nr is still the same.
-            head_idx += part.len();
-            from = &from[part.len()..];
-        }
-
-        dbg!(555);
-
-        // write whole blocks
-        while from.len() > block_size {
-            block_nr = self.alloc.alloc_block(block_type, block_align)?;
-            block = self.alloc.block_mut(block_nr, block_align)?;
-            block.set_dirty(true);
-
-            dbg!(block_nr);
-
-            block.data.copy_from_slice(&from[0..block_size]);
-
-            // block_nr = block_nr; // block_nr already changed.
-            head_idx = block_size;
-            from = &from[block_size..];
-        }
-
-        // remainder
-        if from.len() > 0 {
-            block_nr = self.alloc.alloc_block(block_type, block_align)?;
-            block = self.alloc.block_mut(block_nr, block_align)?;
-            block.set_dirty(true);
-
-            dbg!(block_nr);
-
-            block.data[0..from.len()].copy_from_slice(from);
-
-            // block_nr = block_nr; // block_nr already changed.
-            head_idx += from.len();
-            from = &from[from.len()..];
-        }
+            unreachable!()
+        };
 
         // persist state
         self.block_nr = block_nr;
-        self.head_idx = head_idx;
+        self.write_head = write_head;
         self.alloc
             .streams
-            .set_head_idx(self.block_type, self.head_idx)?;
+            .set_head_idx(self.block_type, self.write_head)?;
 
-        dbg!(self.block_nr, self.head_idx);
+        dbg!(self.block_nr, self.write_head);
 
-        Ok(buf.len())
+        Ok(n)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -697,16 +702,16 @@ impl<'a> Write for BlockWriter<'a> {
 
 struct BlockReader<'a> {
     alloc: &'a mut Alloc,
-    block_type: BlockType,
     block_align: usize,
 
-    head_idx: usize,
+    write_head: usize,
 
     block_nrs: Vec<LogicalNr>,
     block_idx: usize,
     data_idx: usize,
 }
 
+#[inline]
 fn max_read_size(
     block_nrs: &Vec<LogicalNr>,
     block_idx: usize,
@@ -725,26 +730,25 @@ impl<'a> Read for BlockReader<'a> {
         let block_size = self.alloc.block_size();
         let block_align = self.block_align;
 
-        let head_idx = self.head_idx;
+        let write_head = self.write_head;
         let block_nrs = &self.block_nrs;
+
         let mut block_idx = self.block_idx;
         let mut data_idx = self.data_idx;
-
-        // get block
-        let mut block = self.alloc.block(block_nrs[block_idx], block_align)?;
-        let mut logical_block_size = max_read_size(block_nrs, block_idx, head_idx, block_size);
+        let mut logical_block_size = max_read_size(block_nrs, block_idx, write_head, block_size);
 
         // next block needed?
-        if data_idx == logical_block_size {
-            if block_idx + 1 < block_nrs.len() {
-                block_idx += 1;
+        let block = if data_idx < logical_block_size {
+            self.alloc.block(block_nrs[block_idx], block_align)?
+        } else if data_idx == logical_block_size && block_idx + 1 < block_nrs.len() {
+            block_idx += 1;
+            data_idx = 0;
+            logical_block_size = max_read_size(block_nrs, block_idx, write_head, block_size);
 
-                block = self.alloc.block(self.block_nrs[block_idx], block_align)?;
-                logical_block_size = max_read_size(block_nrs, block_idx, head_idx, block_size);
-            } else {
-                return Ok(0);
-            }
-        }
+            self.alloc.block(self.block_nrs[block_idx], block_align)?
+        } else {
+            return Ok(0);
+        };
 
         // copy data and forward
         let part = &block.data[data_idx..logical_block_size];
