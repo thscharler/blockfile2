@@ -9,7 +9,7 @@ use std::fs::File;
 use std::marker::PhantomData;
 use std::mem::size_of;
 
-/// Manages block-types.
+/// Maps logical block-nr -> block-type.
 pub(crate) struct Types {
     block_size: usize,
     blocks: Vec<TypesBlock>,
@@ -79,15 +79,37 @@ impl Types {
         }
 
         new_self.init_free_list();
+        new_self.verify()?;
 
         Ok(new_self)
+    }
+
+    fn verify(&self) -> Result<(), Error> {
+        let mut start_nr = LogicalNr(0);
+        for block in &self.blocks {
+            if start_nr != block.start_nr() {
+                return Err(Error::err(FBErrorKind::InvalidBlockSequence(
+                    block.block_nr(),
+                    block.start_nr(),
+                )));
+            }
+            start_nr = block.end_nr();
+
+            let data = unsafe { block.0.cast_header_array::<TypesHeader, u32>() };
+            for v in data.array {
+                BlockType::try_from(*v)
+                    .or_else(|v| Err(Error::err(FBErrorKind::IllegalBlockType(v))))?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Rebuild the free list.
     fn init_free_list(&mut self) {
         for types_block in self.blocks.iter().rev() {
             for (nr, ty) in types_block.iter_block_type().rev() {
-                if ty == BlockType::Free || ty == BlockType::NotAllocated {
+                if ty == BlockType::Free {
                     self.free.push(nr);
                 }
             }
@@ -136,9 +158,11 @@ impl Types {
         let last_block = self.blocks.last_mut().expect("last");
         let start_nr = last_block.end_nr();
         last_block.set_next_nr(new_nr);
+        last_block.set_dirty(true);
 
         let mut block = TypesBlock::new(new_nr, self.block_size);
         block.set_start_nr(start_nr);
+        block.set_dirty(true);
         let end_nr = block.end_nr();
         self.blocks.push(block);
 
@@ -160,7 +184,12 @@ impl Types {
         }
     }
 
-    /// Iterate all physical blocks. Adds the dirty flag to the result.
+    /// Iterator
+    pub fn iter(&self) -> impl Iterator<Item = &'_ TypesBlock> {
+        self.blocks.iter()
+    }
+
+    /// Iterate all dirty blocks.
     pub fn iter_dirty(&self) -> impl Iterator<Item = LogicalNr> {
         struct DirtyIter {
             idx: usize,
@@ -196,6 +225,7 @@ impl Types {
     }
 
     /// Iterate block-nr and type.
+    /// Applies the filter to reduce the temporary list.
     pub fn iter_block_type<F>(
         &self,
         filter: &F,
@@ -258,15 +288,6 @@ impl Types {
     fn map_mut(&mut self, block_nr: LogicalNr) -> Option<&mut TypesBlock> {
         let map_idx = block_nr.as_u32() / TypesBlock::len_types_g(self.block_size) as u32;
         self.blocks.get_mut(map_idx as usize)
-    }
-}
-
-impl<'a> IntoIterator for &'a Types {
-    type Item = &'a TypesBlock;
-    type IntoIter = std::slice::Iter<'a, TypesBlock>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.blocks.iter()
     }
 }
 
@@ -435,17 +456,17 @@ impl TypesBlock {
 
     /// Creates a view over the block.
     fn data_mut_g(block: &mut Block) -> TypesDataMut<'_> {
-        block.cast_header_array_mut()
+        unsafe { block.cast_header_array_mut() }
     }
 
     /// Creates a view over the block.
     fn data_mut(&mut self) -> TypesDataMut<'_> {
-        self.0.cast_header_array_mut()
+        unsafe { self.0.cast_header_array_mut() }
     }
 
     /// Creates a view over the block.
     fn data(&self) -> TypesData<'_> {
-        self.0.cast_header_array()
+        unsafe { self.0.cast_header_array() }
     }
 }
 

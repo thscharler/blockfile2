@@ -3,9 +3,13 @@ use crate::blockmap::{block_io, BlockType, _INIT_HEADER_NR};
 use crate::{Error, LogicalNr, PhysicalNr};
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
-use std::mem::{align_of, size_of};
+use std::mem::align_of;
 
-/// file-header block.
+/// File-header.
+///
+/// There is a single file-header block positioned at the beginning of the file.
+/// Contains the positions of further structures.
+/// Enables copy-on-write by switching between a pair of the metadata.
 pub struct HeaderBlock(pub(super) Block);
 
 /// State of the header-block. This indicates which copy of the metadata is currently valid.
@@ -17,8 +21,6 @@ pub enum State {
 }
 
 /// View over the block with meta-data.
-///
-/// The state indicates which copy is valid.
 #[repr(C)]
 #[derive(Debug)]
 struct BlockMapHeader {
@@ -28,6 +30,12 @@ struct BlockMapHeader {
     high: PhysicalPages, //20
 }
 
+const OFFSET_STATE: usize = 0;
+const OFFSET_LOW: usize = 8;
+const OFFSET_HIGH: usize = 20;
+const OFFSET_END: usize = 32;
+
+/// Part of the header data.
 #[repr(C)]
 #[derive(Debug)]
 struct PhysicalPages {
@@ -46,13 +54,9 @@ impl HeaderBlock {
             BlockType::Header,
         );
 
-        let header_0 = unsafe {
-            debug_assert!(size_of::<BlockMapHeader>() <= block_size);
-            let s = &mut block_0.data[0];
-            &mut *(s as *mut u8 as *mut BlockMapHeader)
-        };
+        let header_0 = unsafe { block_0.cast_mut::<BlockMapHeader>() };
 
-        // start high so the initial store goes to low.
+        // Start high so the initial store goes to low.
         header_0.state = State::High;
         header_0.block_size = block_size as u32;
         header_0.low.types = PhysicalNr(0);
@@ -65,7 +69,7 @@ impl HeaderBlock {
         Self(block_0)
     }
 
-    /// New header block.
+    /// New header block for load.
     pub(super) fn new(block_size: usize) -> Self {
         Self(Block::new(
             _INIT_HEADER_NR,
@@ -80,20 +84,14 @@ impl HeaderBlock {
         self.0.block_nr()
     }
 
-    const OFFSET_STATE: usize = 0;
-    const OFFSET_LOW: usize = 8;
-    const OFFSET_HIGH: usize = 20;
-    const OFFSET_END: usize = 32;
-
     /// Set the state independent of the rest of the data.
     /// Needs a sync afterwards to make this atomic.
     pub(super) fn store_state(&mut self, file: &mut File, state: State) -> Result<(), Error> {
         let state_bytes = (state as u32).to_ne_bytes();
-        block_io::sub_store_raw(
+        block_io::sub_store_raw_0(
             file,
-            PhysicalNr(0),
             self.0.block_size(),
-            Self::OFFSET_STATE,
+            OFFSET_STATE,
             state_bytes.as_ref(),
         )?;
         self.data_mut().state = state;
@@ -118,12 +116,11 @@ impl HeaderBlock {
         data.low.physical = physical;
         data.low.streams = streams;
 
-        block_io::sub_store_raw(
+        block_io::sub_store_raw_0(
             file,
-            PhysicalNr(0),
             self.0.block_size(),
-            Self::OFFSET_LOW,
-            &self.0.data[Self::OFFSET_LOW..Self::OFFSET_HIGH],
+            OFFSET_LOW,
+            &self.0.data[OFFSET_LOW..OFFSET_HIGH],
         )?;
         Ok(())
     }
@@ -156,12 +153,11 @@ impl HeaderBlock {
         data.high.physical = physical;
         data.high.streams = streams;
 
-        block_io::sub_store_raw(
+        block_io::sub_store_raw_0(
             file,
-            PhysicalNr(0),
             self.0.block_size(),
-            Self::OFFSET_HIGH,
-            &self.0.data[Self::OFFSET_HIGH..Self::OFFSET_END],
+            OFFSET_HIGH,
+            &self.0.data[OFFSET_HIGH..OFFSET_END],
         )?;
         Ok(())
     }
@@ -188,12 +184,12 @@ impl HeaderBlock {
 
     /// View over the block-data.
     fn data_mut(&mut self) -> &mut BlockMapHeader {
-        self.0.cast_mut()
+        unsafe { self.0.cast_mut() }
     }
 
     /// View over the block-data.
     fn data(&self) -> &BlockMapHeader {
-        self.0.cast()
+        unsafe { self.0.cast() }
     }
 }
 

@@ -96,6 +96,15 @@ where
         self.alloc.block_size()
     }
 
+    /// Returns the alignment for the block.
+    pub fn block_align(&self, block_nr: LogicalNr) -> Result<usize, Error> {
+        let block_type = self.alloc.block_type(block_nr)?;
+        let Some(user_block_type) = U::user_type(block_type) else {
+            return Err(Error::err(FBErrorKind::NoUserBlockType(block_type)));
+        };
+        Ok(U::align(user_block_type))
+    }
+
     /// Header data.
     pub fn header(&self) -> &HeaderBlock {
         self.alloc.header()
@@ -146,7 +155,8 @@ where
         self.alloc.iter_blocks()
     }
 
-    /// Store generation.
+    /// Last store generation. Simple counter of store() calls.
+    /// This is not used internally, but might be used in a retain_blocks() call.
     pub fn generation(&self) -> u32 {
         self.alloc.generation()
     }
@@ -192,13 +202,13 @@ where
 
     /// Get a data block.
     pub fn get(&mut self, block_nr: LogicalNr) -> Result<&Block, Error> {
-        let align = self.alloc.block_align::<U>(block_nr)?;
+        let align = self.block_align(block_nr)?;
         self.alloc.block(block_nr, align)
     }
 
     /// Get a data block.
     pub fn get_mut(&mut self, block_nr: LogicalNr) -> Result<&mut Block, Error> {
-        let align = self.alloc.block_align::<U>(block_nr)?;
+        let align = self.block_align(block_nr)?;
         self.alloc.block_mut(block_nr, align)
     }
 

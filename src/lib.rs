@@ -171,12 +171,16 @@ impl PartialOrd<u32> for LogicalNr {
 pub enum FBErrorKind {
     /// Seek failed. IO error.
     SeekBlock(PhysicalNr, io::Error),
+    /// Seek failed. IO error.
+    SeekBlockOffset(PhysicalNr, u64),
     /// Storing a block failed. IO error.
     StoreRaw(LogicalNr, PhysicalNr, io::Error),
     /// Loading a block PhysicalNr. IO error.
     LoadRaw(LogicalNr, PhysicalNr, io::Error),
     /// Seek failed. IO error.
     SubSeekBlock(PhysicalNr, io::Error),
+    /// Seek failed. IO error.
+    SubSeekBlockOffset(PhysicalNr, u64),
     /// Storing a block failed. IO error.
     SubStoreRaw(PhysicalNr, io::Error),
     /// Sync failed. IO error.
@@ -211,6 +215,12 @@ pub enum FBErrorKind {
     NoBlockType(LogicalNr),
     /// Severe load error. Block-data is garbage?
     InvalidBlockType(LogicalNr, BlockType),
+    /// Illegal u32 value for a block-type.
+    IllegalBlockType(u32),
+    /// Sequence error for block lists.
+    InvalidBlockSequence(LogicalNr, LogicalNr),
+    /// A physical block-nr is assigned to two logical blocks.
+    DoubleAssignedPhysicalBlock(LogicalNr, LogicalNr),
     /// Severe load error. Header is broken.
     HeaderCorrupted,
 }

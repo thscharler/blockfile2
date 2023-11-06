@@ -1,4 +1,4 @@
-use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
+use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr};
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fs::File;
@@ -67,7 +67,7 @@ impl Alloc {
             #[cfg(debug_assertions)]
             store_panic: 0,
         };
-        s.assert_block_type(block_size).expect("init-ok");
+        s.verify(block_size).expect("init-ok");
 
         s
     }
@@ -123,7 +123,7 @@ impl Alloc {
             store_panic: 0,
         };
 
-        s.assert_block_type(block_size)?;
+        s.verify(block_size)?;
 
         Ok(s)
     }
@@ -136,6 +136,7 @@ impl Alloc {
     }
 
     /// Store to file.
+    ///
     pub fn store(&mut self) -> Result<(), Error> {
         self.generation += 1;
 
@@ -283,7 +284,7 @@ impl Alloc {
     }
 
     // post load validation.
-    fn assert_block_type(&self, block_size: usize) -> Result<(), Error> {
+    fn verify(&self, block_size: usize) -> Result<(), Error> {
         if self.header.stored_block_size() != block_size {
             return Err(Error::err(FBErrorKind::InvalidBlockSize(
                 self.header.stored_block_size(),
@@ -300,7 +301,7 @@ impl Alloc {
             )));
         }
 
-        for v in &self.types {
+        for v in self.types.iter() {
             let block_nr = v.block_nr();
             let Ok(block_type) = self.block_type(block_nr) else {
                 return Err(Error::err(FBErrorKind::NoBlockType(block_nr)));
@@ -311,7 +312,8 @@ impl Alloc {
                 )));
             }
         }
-        for v in &self.physical {
+
+        for v in self.physical.iter() {
             let block_nr = v.block_nr();
             let Ok(block_type) = self.block_type(block_nr) else {
                 return Err(Error::err(FBErrorKind::NoBlockType(block_nr)));
@@ -368,7 +370,7 @@ impl Alloc {
 
     /// Iterate over block-types.
     pub fn iter_types(&self) -> impl Iterator<Item = &'_ TypesBlock> {
-        (&self.types).into_iter()
+        self.types.iter()
     }
 
     /// For debug output only.
@@ -378,10 +380,10 @@ impl Alloc {
 
     /// Iterate over the logical->physical map.
     pub fn iter_physical(&self) -> impl Iterator<Item = &'_ PhysicalBlock> {
-        (&self.physical).into_iter()
+        self.physical.iter()
     }
 
-    /// Metadata
+    /// Metadata. As this copies the metadata there is a front-line filter available.
     pub fn iter_metadata<F>(
         &self,
         filter: &F,
@@ -392,7 +394,8 @@ impl Alloc {
         self.types.iter_block_type(filter)
     }
 
-    /// Store generation.
+    /// Last store generation. Simple counter of store() calls.
+    /// This is not used internally, but might be used in a retain_blocks() call.
     pub fn generation(&self) -> u32 {
         self.generation
     }
@@ -448,25 +451,14 @@ impl Alloc {
     where
         F: FnMut(&LogicalNr, &mut Block) -> bool,
     {
-        // don't allow the outside world to fuck up our data.
         self.user.retain(move |k, v| match v.block_type() {
-            BlockType::NotAllocated => false,
-            BlockType::Free => false,
-            BlockType::Header => true,
-            BlockType::Types => true,
-            BlockType::Physical => true,
-            BlockType::Streams => true,
+            BlockType::Free
+            | BlockType::Header
+            | BlockType::Types
+            | BlockType::Physical
+            | BlockType::Streams => unreachable!(), // stored elsewhere
             _ => f(k, v),
         });
-    }
-
-    /// Returns the alignment for the block.
-    pub fn block_align<U: UserBlockType>(&self, block_nr: LogicalNr) -> Result<usize, Error> {
-        let block_type = self.block_type(block_nr)?;
-        let Some(user_block_type) = U::user_type(block_type) else {
-            return Err(Error::err(FBErrorKind::NoUserBlockType(block_type)));
-        };
-        Ok(U::align(user_block_type))
     }
 
     /// Returns the block.
@@ -492,11 +484,10 @@ impl Alloc {
     pub fn load_block(&mut self, block_nr: LogicalNr, align: usize) -> Result<(), Error> {
         let block_type = self.types.block_type(block_nr)?;
         let block_pnr = match block_type {
-            BlockType::NotAllocated => {
+            BlockType::Free => {
                 return Err(Error::err(FBErrorKind::NotAllocated(block_nr)));
             }
-            BlockType::Free => self.physical.physical_nr(block_nr)?,
-            BlockType::Header | BlockType::Types | BlockType::Physical => {
+            BlockType::Header | BlockType::Types | BlockType::Physical | BlockType::Streams => {
                 return Err(Error::err(FBErrorKind::AccessDenied(block_nr)));
             }
             _ => self.physical.physical_nr(block_nr)?,

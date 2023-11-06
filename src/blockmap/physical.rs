@@ -8,7 +8,19 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::mem::{align_of, size_of};
 
-/// Manages the map logical->physical block.
+/// Maps logical->physical block.
+///
+/// A logical block may not be mapped. It gets the physical block-nr 0.
+/// This can happen if the block is allocated but never marked modified.
+///
+/// This behaviour is quite nice to initialize optional parts of a data-structure.
+/// So this is considered a feature.
+///
+/// It manages a free-list of unused blocks within the file, but hands out new blocks
+/// beyond the current file size too. So a bit of care is necessary to write blocks in
+/// the same order as they are assigned physical blocks.
+///
+/// The free list is rebuilt after each store.
 pub(crate) struct Physical {
     block_size: usize,
     blocks: Vec<PhysicalBlock>,
@@ -19,10 +31,13 @@ pub(crate) struct Physical {
 /// Wrapper around a block.
 pub struct PhysicalBlock(pub(crate) Block);
 
+/// Header data.
 #[repr(C)]
 #[derive(Debug)]
 struct PhysicalHeader {
+    /// First logical block-nr that is managed by this map.
     start_nr: LogicalNr,
+    /// Next logical block-nr that contains the next map.
     next_nr: LogicalNr,
 }
 
@@ -77,32 +92,35 @@ impl Physical {
 
         let file_size = block_io::metadata(file)?.len();
         new_self.init_free_list(file_size);
-        new_self.verify();
+        new_self.verify()?;
 
         Ok(new_self)
     }
 
-    fn verify(&self) {
+    fn verify(&self) -> Result<(), Error> {
         let mut assigned_pnr = HashMap::new();
 
+        let mut start_nr = LogicalNr(0);
         for block in &self.blocks {
-            for (nr, pnr) in block.iter_nr() {
-                if pnr != 0 {
-                    assert!(!self.free.contains(&pnr), "{}", pnr);
+            if start_nr != block.start_nr() {
+                return Err(Error::err(FBErrorKind::InvalidBlockSequence(
+                    block.block_nr(),
+                    block.start_nr(),
+                )));
+            }
+            start_nr = block.end_nr();
 
-                    assert!(
-                        !assigned_pnr.contains_key(&pnr),
-                        "pnr double assigned: pnr={}: {:?} + {}",
-                        pnr,
-                        assigned_pnr.get(&pnr),
-                        nr
-                    );
-                    assigned_pnr.insert(pnr, nr);
-
-                    assert!(pnr <= self.max, "{} <= {}", pnr, self.max);
+            for (nr, pnr) in block.iter_nr().filter(|(_nr, pnr)| *pnr != 0) {
+                if let Some(nr2) = assigned_pnr.get(&pnr) {
+                    return Err(Error::err(FBErrorKind::DoubleAssignedPhysicalBlock(
+                        *nr2, nr,
+                    )));
                 }
+                assigned_pnr.insert(pnr, nr);
             }
         }
+
+        Ok(())
     }
 
     /// Rebuild the free-list.
@@ -177,16 +195,18 @@ impl Physical {
         map.physical_nr(block_nr)
     }
 
-    /// Add a new blockmap and links it to the maximum one.
+    /// Add a new blockmap and links it to the last one.
     pub fn append_blockmap(&mut self, next_nr: LogicalNr) -> Result<(), Error> {
         let Some(last_block) = self.blocks.last_mut() else {
             return Err(Error::err(FBErrorKind::NoBlockMap));
         };
+        last_block.set_dirty(true);
         last_block.set_next_nr(next_nr);
         let start_nr = last_block.end_nr();
 
         let mut block = PhysicalBlock::new(next_nr, self.block_size);
         block.set_start_nr(start_nr);
+        block.set_dirty(true);
         self.blocks.push(block);
 
         Ok(())
@@ -201,7 +221,12 @@ impl Physical {
         }
     }
 
-    /// Iterate all physical blocks. Adds the dirty flag to the result.
+    /// Iterate all PhysicalBlock structs.
+    pub fn iter(&self) -> impl Iterator<Item = &'_ PhysicalBlock> {
+        self.blocks.iter()
+    }
+
+    /// Iterate all dirty blocks.
     pub fn iter_dirty(&self) -> impl Iterator<Item = LogicalNr> {
         struct DirtyIter {
             idx: usize,
@@ -246,15 +271,6 @@ impl Physical {
     fn map_mut(&mut self, block_nr: LogicalNr) -> Option<&mut PhysicalBlock> {
         let map_idx = block_nr.as_u32() / PhysicalBlock::len_physical_g(self.block_size) as u32;
         self.blocks.get_mut(map_idx as usize)
-    }
-}
-
-impl<'a> IntoIterator for &'a Physical {
-    type Item = &'a PhysicalBlock;
-    type IntoIter = std::slice::Iter<'a, PhysicalBlock>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.blocks.iter()
     }
 }
 
@@ -307,7 +323,7 @@ impl PhysicalBlock {
 
     /// Calculate the length for the dyn-sized BlockMapPhysical.
     pub const fn len_physical_g(block_size: usize) -> usize {
-        (block_size - size_of::<LogicalNr>() - size_of::<LogicalNr>()) / size_of::<PhysicalNr>()
+        (block_size - size_of::<PhysicalHeader>()) / size_of::<PhysicalNr>()
     }
 
     /// Length for the dyn-sized BlockMapPhysical.
@@ -404,12 +420,12 @@ impl PhysicalBlock {
 
     /// Creates a view over the block.
     fn data_mut(&mut self) -> PhysicalDataMut<'_> {
-        self.0.cast_header_array_mut()
+        unsafe { self.0.cast_header_array_mut() }
     }
 
     /// Creates a view over the block.
     fn data(&self) -> PhysicalData<'_> {
-        self.0.cast_header_array()
+        unsafe { self.0.cast_header_array() }
     }
 }
 

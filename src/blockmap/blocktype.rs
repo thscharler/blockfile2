@@ -2,20 +2,27 @@ use crate::UserBlockType;
 use std::fmt::{Debug, Display, Formatter};
 use std::mem::align_of;
 
-/// Available blocktypes.
+/// Defines block-types.
 ///
 /// The first 15 values are reserved for internal use, the rest can be used.
-/// Currently there are 16 defined values.
+/// Currently there are 16 defined values for user-blocks.
 #[non_exhaustive]
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BlockType {
-    NotAllocated = 0,
-    Free = 1,
+    /// Block is not used in the file.
+    Free = 0,
 
+    /// The single file-header block positioned at the beginning of the file.
+    /// Contains the positions of further structures, enables copy-on-write.
+    /// And some other metadata.
     Header = 2,
+    /// Contains the block-type for each logical block.
     Types = 3,
+    /// Contains the mapping from logical block-nr to physical block-nr.
     Physical = 4,
+    /// A blocktype can be defined to act like a separate stream inside the file.
+    /// This block contains the head-idx for the last block of the stream.
     Streams = 5,
 
     User1 = 16,
@@ -64,8 +71,7 @@ impl Display for BlockType {
 impl Debug for BlockType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let t = match self {
-            BlockType::NotAllocated => "___",
-            BlockType::Free => "FRE",
+            BlockType::Free => "___",
 
             BlockType::Header => "BHD",
             BlockType::Types => "BTY",
@@ -97,8 +103,8 @@ impl TryFrom<u32> for BlockType {
     type Error = u32;
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(BlockType::NotAllocated),
-            1 => Ok(BlockType::Free),
+            0 => Ok(BlockType::Free),
+
             2 => Ok(BlockType::Header),
             3 => Ok(BlockType::Types),
             4 => Ok(BlockType::Physical),

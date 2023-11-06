@@ -15,6 +15,7 @@ struct StreamIdx {
 }
 
 impl StreamsBlock {
+    /// Init
     pub(super) fn init(block_size: usize) -> Self {
         let block = Block::new(
             _INIT_STREAM_NR,
@@ -25,6 +26,7 @@ impl StreamsBlock {
         Self(block)
     }
 
+    /// New for load.
     pub(super) fn new(block_size: usize) -> Self {
         let block = Block::new(
             _INIT_STREAM_NR,
@@ -35,14 +37,17 @@ impl StreamsBlock {
         Self(block)
     }
 
+    /// Block-nr.
     pub fn block_nr(&self) -> LogicalNr {
         self.0.block_nr()
     }
 
+    /// Dirty.
     pub fn is_dirty(&self) -> bool {
         self.0.is_dirty()
     }
 
+    /// Dirty.
     pub fn set_dirty(&mut self, dirty: bool) {
         self.0.set_dirty(dirty)
     }
@@ -57,7 +62,7 @@ impl StreamsBlock {
             if data[i].block_type == block_type {
                 data[i].idx = idx as u32;
                 return Ok(());
-            } else if data[i].block_type == BlockType::NotAllocated {
+            } else if data[i].block_type == BlockType::Free {
                 data[i].block_type = block_type;
                 data[i].idx = idx as u32;
                 return Ok(());
@@ -76,7 +81,7 @@ impl StreamsBlock {
         for i in 0..data.len() {
             if data[i].block_type == block_type {
                 return data[i].idx as usize;
-            } else if data[i].block_type == BlockType::NotAllocated {
+            } else if data[i].block_type == BlockType::Free {
                 break;
             }
         }
@@ -86,12 +91,12 @@ impl StreamsBlock {
 
     /// View over the block-data.
     fn data_mut(&mut self) -> &mut [StreamIdx] {
-        self.0.cast_array_mut()
+        unsafe { self.0.cast_array_mut() }
     }
 
     /// View over the block-data.
     fn data(&self) -> &[StreamIdx] {
-        self.0.cast_array()
+        unsafe { self.0.cast_array() }
     }
 }
 
@@ -125,7 +130,7 @@ where
                     for c in 0..8 {
                         let i = r * 8 + c;
 
-                        if i < self.0.len() && self.0[i].block_type != BlockType::NotAllocated {
+                        if i < self.0.len() && self.0[i].block_type != BlockType::Free {
                             write!(
                                 f,
                                 "{:4?}:{:8} ",

@@ -6,8 +6,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 /// Sync file storage.
 pub(crate) fn sync(file: &mut File) -> Result<(), Error> {
-    let result = file.sync_all();
-    match result {
+    match file.sync_all() {
         Ok(v) => Ok(v),
         Err(e) => Err(Error::err(FBErrorKind::Sync(e))),
     }
@@ -15,22 +14,18 @@ pub(crate) fn sync(file: &mut File) -> Result<(), Error> {
 
 /// Metadata
 pub(crate) fn metadata(file: &mut File) -> Result<Metadata, Error> {
-    let result = file.metadata();
-    match result {
+    match file.metadata() {
         Ok(v) => Ok(v),
         Err(e) => Err(Error::err(FBErrorKind::Metadata(e))),
     }
 }
 
-/// Write a block to storage.
-///
-/// Panic
-/// panics if the block was not allocated or if it isn't the next-to-last block.
+/// Write block 0 to storage. This one requires special attention as we use 0 as a marker for
+/// "no physical block assigned" too.
 pub(crate) fn store_raw_0(file: &mut File, block: &Block) -> Result<(), Error> {
     seek_block(file, PhysicalNr(0), block.block_size())?;
 
-    let result = file.write_all(block.data.as_ref());
-    match result {
+    match file.write_all(block.data.as_ref()) {
         Ok(v) => Ok(v),
         Err(e) => Err(Error::err(FBErrorKind::StoreRaw(
             block.block_nr(),
@@ -43,7 +38,7 @@ pub(crate) fn store_raw_0(file: &mut File, block: &Block) -> Result<(), Error> {
 /// Write a block to storage.
 ///
 /// Panic
-/// panics if the block was not allocated or if it isn't the next-to-last block.
+/// Panics if this tries to store block 0.
 pub(crate) fn store_raw(
     file: &mut File,
     physical_block: PhysicalNr,
@@ -53,8 +48,7 @@ pub(crate) fn store_raw(
 
     seek_block(file, physical_block, block.block_size())?;
 
-    let result = file.write_all(block.data.as_ref());
-    match result {
+    match file.write_all(block.data.as_ref()) {
         Ok(v) => Ok(v),
         Err(e) => Err(Error::err(FBErrorKind::StoreRaw(
             block.block_nr(),
@@ -64,13 +58,12 @@ pub(crate) fn store_raw(
     }
 }
 
-/// Read the 0 block. This requires special attention as we use 0 as a marker for
+/// Read the 0 block. This one requires special attention as we use 0 as a marker for
 /// "no physical block assigned" too.
 pub(crate) fn load_raw_0(file: &mut File, block: &mut Block) -> Result<(), Error> {
     seek_block(file, PhysicalNr(0), block.block_size())?;
 
-    let result = file.read_exact(block.data.as_mut());
-    match result {
+    match file.read_exact(block.data.as_mut()) {
         Ok(v) => Ok(v),
         Err(e) => Err(Error::err(FBErrorKind::LoadRaw(
             block.block_nr(),
@@ -83,7 +76,7 @@ pub(crate) fn load_raw_0(file: &mut File, block: &mut Block) -> Result<(), Error
 /// Read a block from storage.
 ///
 /// Panic
-/// panics if the block does not exist in storage.
+/// Panics if this tries to read block 0.
 pub(crate) fn load_raw(
     file: &mut File,
     physical_block: PhysicalNr,
@@ -93,8 +86,7 @@ pub(crate) fn load_raw(
 
     seek_block(file, physical_block, block.block_size())?;
 
-    let result = file.read_exact(block.data.as_mut());
-    match result {
+    match file.read_exact(block.data.as_mut()) {
         Ok(v) => Ok(v),
         Err(e) => Err(Error::err(FBErrorKind::LoadRaw(
             block.block_nr(),
@@ -104,61 +96,48 @@ pub(crate) fn load_raw(
     }
 }
 
-/// Seek to the block_nr
-///
-/// Panics
-/// Panics if the seek fails.
-fn seek_block(
-    file: &mut File,
-    physical_block: PhysicalNr,
-    block_size: usize,
-) -> Result<u64, Error> {
+/// Seek to the block_nr.
+fn seek_block(file: &mut File, physical_block: PhysicalNr, block_size: usize) -> Result<(), Error> {
     let seek_pos = (physical_block.as_usize() * block_size) as u64;
 
-    let result = file.seek(SeekFrom::Start(seek_pos));
-    match result {
-        Ok(v) => Ok(v),
-        Err(e) => Err(Error::err(FBErrorKind::SeekBlock(physical_block, e))),
+    let seeked_pos = match file.seek(SeekFrom::Start(seek_pos)) {
+        Ok(v) => v,
+        Err(e) => return Err(Error::err(FBErrorKind::SeekBlock(physical_block, e))),
+    };
+
+    if seek_pos != seeked_pos {
+        return Err(Error::err(FBErrorKind::SeekBlockOffset(
+            physical_block,
+            seeked_pos,
+        )));
     }
+    Ok(())
 }
 
-/// Write a block to storage.
+/// Write part of block 0 to storage.
 ///
 /// Panic
-/// panics if the block was not allocated or if it isn't the next-to-last block.
-pub(crate) fn sub_store_raw(
+/// Panics if this would write outside of a block.
+pub(crate) fn sub_store_raw_0(
     file: &mut File,
-    physical_block: PhysicalNr,
     block_size: usize,
     offset: usize,
     block: &[u8],
 ) -> Result<(), Error> {
     debug_assert!((offset + block.len()) <= block_size);
-    sub_seek_block(file, physical_block, block_size, offset)?;
-
-    let result = file.write_all(block);
-    match result {
-        Ok(v) => Ok(v),
-        Err(e) => Err(Error::err(FBErrorKind::SubStoreRaw(physical_block, e))),
+    let seeked_pos = match file.seek(SeekFrom::Start(offset as u64)) {
+        Ok(v) => v,
+        Err(e) => return Err(Error::err(FBErrorKind::SubSeekBlock(PhysicalNr(0), e))),
+    };
+    if seeked_pos != offset as u64 {
+        return Err(Error::err(FBErrorKind::SubSeekBlockOffset(
+            PhysicalNr(0),
+            seeked_pos,
+        )));
     }
-}
 
-/// Seek to the block_nr
-///
-/// Panic
-/// Panics if the seek fails.
-fn sub_seek_block(
-    file: &mut File,
-    physical_block: PhysicalNr,
-    block_size: usize,
-    offset: usize,
-) -> Result<u64, Error> {
-    debug_assert!(offset <= block_size);
-    let seek_pos = (physical_block.as_usize() * block_size + offset) as u64;
-
-    let result = file.seek(SeekFrom::Start(seek_pos));
-    match result {
+    match file.write_all(block) {
         Ok(v) => Ok(v),
-        Err(e) => Err(Error::err(FBErrorKind::SubSeekBlock(physical_block, e))),
+        Err(e) => Err(Error::err(FBErrorKind::SubStoreRaw(PhysicalNr(0), e))),
     }
 }
