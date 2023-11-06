@@ -252,8 +252,8 @@ impl Alloc {
                 block_io::sync(&mut self.file)?;
 
                 #[cfg(debug_assertions)]
-                if self.store_panic == 8 {
-                    panic!("invoke store_panic 8");
+                if self.store_panic == 7 {
+                    panic!("invoke store_panic 7");
                 }
 
                 self.header.store_state(&mut self.file, State::Low)?;
@@ -262,8 +262,8 @@ impl Alloc {
         }
 
         #[cfg(debug_assertions)]
-        if self.store_panic == 9 {
-            panic!("invoke store_panic 9");
+        if self.store_panic == 100 {
+            panic!("invoke store_panic 100");
         }
 
         // Rebuild the list of free physical pages.

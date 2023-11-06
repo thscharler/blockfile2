@@ -124,7 +124,7 @@ fn test_store() -> Result<(), Error> {
 
     let m = fb.block_type(LogicalNr(0)).expect("meta-data");
     assert_eq!(m.block_type(), BlockType::Header);
-    let m = fb.block_type(LogicalNr(3)).expect("meta-data");
+    let m = fb.block_type(LogicalNr(4)).expect("meta-data");
     assert_eq!(m.block_type(), BlockType::User1);
 
     dbg!(&fb);
@@ -135,6 +135,7 @@ fn test_store() -> Result<(), Error> {
 #[test]
 fn test_illegal() -> Result<(), Error> {
     let mut fb = BasicFileBlocks::create(&Path::new("tmp/not_dirty.bin"), BLOCK_SIZE)?;
+    dbg!(&fb);
     let r = fb.get(LogicalNr(0));
     assert_eq!(
         r.expect_err("error").kind,
@@ -150,10 +151,10 @@ fn test_illegal() -> Result<(), Error> {
         r.expect_err("error").kind,
         FBErrorKind::AccessDenied(LogicalNr(2))
     );
-    let r = fb.get(LogicalNr(3));
+    let r = fb.get(LogicalNr(4));
     assert_eq!(
         r.expect_err("error").kind,
-        FBErrorKind::NotAllocated(LogicalNr(3))
+        FBErrorKind::NotAllocated(LogicalNr(4))
     );
     Ok(())
 }
@@ -193,17 +194,18 @@ fn store_panic(panic_: u32) -> Result<BasicFileBlocks, Error> {
 #[cfg(debug_assertions)]
 #[test]
 fn test_recover() -> Result<(), Error> {
-    for i in 1..=6 {
+    for i in 1..=7 {
         let fb = store_panic(i)?;
         assert_eq!(
-            fb.block_type(LogicalNr(3)).expect("block_type"),
+            fb.block_type(LogicalNr(4)).expect("block_type"),
             BlockType::NotAllocated
         );
     }
 
-    let fb = store_panic(7)?;
+    let fb = store_panic(100)?;
+    dbg!(&fb);
     assert_eq!(
-        fb.block_type(LogicalNr(3)).expect("block_type"),
+        fb.block_type(LogicalNr(4)).expect("block_type"),
         BlockType::User1
     );
 
