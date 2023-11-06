@@ -1,8 +1,10 @@
-use crate::blockmap::{block_io, Alloc, BlockRead, UserStreamsBlock, UserTypes};
+use crate::blockmap::types::UserTypes;
+use crate::blockmap::{block_io, Alloc, UserStreamsBlock};
 use crate::{
-    Block, BlockType, BlockWrite, Error, FBErrorKind, HeaderBlock, LogicalNr, PhysicalBlock, State,
-    StreamsBlock, TypesBlock, UserBlockType,
+    Block, BlockRead, BlockType, BlockWrite, Error, FBErrorKind, HeaderBlock, LogicalNr,
+    PhysicalBlock, State, StreamsBlock, TypesBlock, UserBlockType,
 };
+use std::cell::Cell;
 use std::fmt::{Debug, Formatter};
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -19,7 +21,7 @@ use std::path::Path;
 /// This way every store can be seen as atomic.
 pub struct FileBlocks<U> {
     alloc: Alloc,
-    _phantom: PhantomData<U>,
+    _phantom: PhantomData<(U, Cell<()>)>,
 }
 
 /// FileBlocks without user block-type mapping.

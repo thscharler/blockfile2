@@ -9,8 +9,9 @@ mod blockmap;
 mod fileblocks;
 
 pub use crate::blockmap::{
-    alloc_box_buffer, Alloc, Block, BlockRead, BlockType, BlockWrite, HeaderBlock, PhysicalBlock,
-    State, StreamsBlock, TypesBlock,
+    alloc_box_buffer, Alloc, Block, BlockRead, BlockType, BlockWrite, HeaderArray, HeaderArrayMut,
+    HeaderBlock, PhysicalBlock, State, StreamsBlock, TypesBlock, UserBlock, UserStreamsBlock,
+    UserTypesBlock,
 };
 pub use crate::fileblocks::{BasicFileBlocks, FileBlocks};
 
@@ -44,7 +45,7 @@ where
 
 /// Newtype for physical block-nr.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PhysicalNr(pub u32);
 
 impl PhysicalNr {
@@ -105,7 +106,7 @@ impl PartialOrd<u32> for PhysicalNr {
 
 /// Newtype for logical block-nr.
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
 pub struct LogicalNr(pub u32);
 
 impl LogicalNr {

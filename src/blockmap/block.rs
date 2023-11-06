@@ -1,7 +1,8 @@
 use crate::blockmap::BlockType;
-use crate::LogicalNr;
+use crate::{user_type_string, LogicalNr, UserBlockType};
 use std::alloc::Layout;
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::mem::{align_of, align_of_val, size_of};
 use std::{alloc, mem, ptr};
 
@@ -17,12 +18,14 @@ pub struct Block {
 }
 
 /// Helper struct for splitting the data-block into header and array-of-T
+#[repr(C)]
 pub struct HeaderArray<'a, H, T> {
     pub header: &'a H,
     pub array: &'a [T],
 }
 
 /// Helper struct for splitting the data-block into header and array-of-T
+#[repr(C)]
 pub struct HeaderArrayMut<'a, H, T> {
     pub header: &'a mut H,
     pub array: &'a mut [T],
@@ -235,14 +238,34 @@ impl Block {
     }
 }
 
+pub struct UserBlock<'a, U>(pub &'a Block, pub PhantomData<U>);
+
 impl Debug for Block {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:?}",
+            UserBlock::<BlockType>(self, PhantomData::<BlockType>)
+        )
+    }
+}
+
+impl<'a, U> Debug for UserBlock<'a, U>
+where
+    U: UserBlockType + Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let width = f.width().unwrap_or(0);
-        write!(f, "[{}]={:?}", self.block_nr, self.block_type)?;
-        if self.dirty {
+        write!(
+            f,
+            "[{}]={}",
+            self.0.block_nr,
+            user_type_string::<U>(self.0.block_type)
+        )?;
+        if self.0.dirty {
             write!(f, " dirty")?;
         }
-        if self.discard {
+        if self.0.discard {
             write!(f, " discard")?;
         }
         if width >= 1 {
@@ -251,7 +274,7 @@ impl Debug for Block {
                 fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
                     for r in 0..(self.0.len() + 16) / 16 {
                         writeln!(f)?;
-                        write!(f, "       ")?;
+                        write!(f, "       {:6}: ", r * 16)?;
 
                         for c in 0..8 {
                             let i = r * 16 + c;
@@ -282,7 +305,7 @@ impl Debug for Block {
                 }
             }
             writeln!(f)?;
-            writeln!(f, "{:?}", RefBlock(self.data.as_ref()))?;
+            writeln!(f, "{:?}", RefBlock(self.0.data.as_ref()))?;
         }
         Ok(())
     }

@@ -104,15 +104,10 @@ impl Types {
         self.free.pop()
     }
 
-    /// Free a physical block.
-    pub fn free_block(&mut self, block_nr: LogicalNr) -> Result<(), Error> {
-        let Some(block) = self.map_mut(block_nr) else {
-            return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
-        };
-
-        block.set_block_type(block_nr, BlockType::Free)?;
+    /// Add a block to the free list.
+    pub fn push_free(&mut self, block_nr: LogicalNr) {
+        debug_assert!(self.block_type(block_nr).expect("block-type") == BlockType::Free);
         self.free.push(block_nr);
-        Ok(())
     }
 
     /// Sets the block-type.
@@ -166,13 +161,13 @@ impl Types {
     }
 
     /// Iterate all physical blocks. Adds the dirty flag to the result.
-    pub fn iter_dirty(&self) -> impl Iterator<Item = (LogicalNr, bool)> {
+    pub fn iter_dirty(&self) -> impl Iterator<Item = LogicalNr> {
         struct DirtyIter {
             idx: usize,
-            blocks: Vec<(LogicalNr, bool)>,
+            blocks: Vec<LogicalNr>,
         }
         impl Iterator for DirtyIter {
-            type Item = (LogicalNr, bool);
+            type Item = LogicalNr;
 
             fn next(&mut self) -> Option<Self::Item> {
                 if self.idx >= self.blocks.len() {
@@ -188,7 +183,13 @@ impl Types {
         let blocks = self
             .blocks
             .iter()
-            .map(|v| (v.block_nr(), v.is_dirty()))
+            .filter_map(|v| {
+                if v.is_dirty() {
+                    Some(v.block_nr())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         DirtyIter { idx: 0, blocks }
@@ -463,7 +464,7 @@ impl Debug for TypesBlock {
 /// Wrapper around UserTypes to get the UserBlockTypes for debug output.
 pub(crate) struct UserTypes<'a, U>(pub &'a Types, pub PhantomData<U>);
 /// Wrapper around UserTypes to get the UserBlockTypes for debug output.
-pub(crate) struct UserTypesBlock<'a, U>(&'a TypesBlock, PhantomData<U>);
+pub struct UserTypesBlock<'a, U>(pub &'a TypesBlock, pub PhantomData<U>);
 
 impl<'a, U> Debug for UserTypes<'a, U>
 where

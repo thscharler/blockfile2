@@ -3,6 +3,7 @@ use crate::blockmap::{block_io, BlockType, _INIT_PHYSICAL_NR};
 use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr};
 use bit_set::BitSet;
 use std::cmp::max;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::mem::{align_of, size_of};
@@ -41,7 +42,7 @@ impl Physical {
             free: Vec::default(),
         };
 
-        new_self.init_free_list();
+        new_self.init_free_list(0);
 
         new_self
     }
@@ -74,28 +75,53 @@ impl Physical {
             new_self.blocks.push(block);
         }
 
-        new_self.init_free_list();
+        let file_size = block_io::metadata(file)?.len();
+        new_self.init_free_list(file_size);
+        new_self.verify();
 
         Ok(new_self)
     }
 
+    fn verify(&self) {
+        let mut assigned_pnr = HashMap::new();
+
+        for block in &self.blocks {
+            for (nr, pnr) in block.iter_nr() {
+                if pnr != 0 {
+                    assert!(!self.free.contains(&pnr), "{}", pnr);
+
+                    assert!(
+                        !assigned_pnr.contains_key(&pnr),
+                        "pnr double assigned: pnr={}: {:?} + {}",
+                        pnr,
+                        assigned_pnr.get(&pnr),
+                        nr
+                    );
+                    assigned_pnr.insert(pnr, nr);
+
+                    assert!(pnr <= self.max, "{} <= {}", pnr, self.max);
+                }
+            }
+        }
+    }
+
     /// Rebuild the free-list.
-    pub fn init_free_list(&mut self) {
+    pub fn init_free_list(&mut self, file_size: u64) {
         self.free.clear();
 
         let mut used_pnr = BitSet::new();
-
         for physical_block in &self.blocks {
             // build bitset of used blocks.
-            for (nr, pnr) in physical_block.iter_nr() {
-                if nr == 0 || pnr != 0 {
+            used_pnr.insert(0); // 0 is reserved
+            for (_nr, pnr) in physical_block.iter_nr() {
+                if pnr != 0 {
                     used_pnr.insert(pnr.as_usize());
                 }
             }
         }
 
         // find free blocks.
-        let mut i = used_pnr.len();
+        let mut i = file_size as usize / self.block_size;
         while i > 0 {
             i -= 1;
             if !used_pnr.contains(i) {
@@ -116,27 +142,30 @@ impl Physical {
         }
     }
 
-    /// Free a physical block.
-    pub fn free_block(&mut self, block_nr: LogicalNr) -> Result<(), Error> {
-        let Some(block) = self.map_mut(block_nr) else {
-            return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
-        };
-
-        let pnr = block.physical_nr(block_nr)?;
-        block.set_physical_nr(block_nr, PhysicalNr(0))?;
-        self.free.push(pnr);
-        Ok(())
-    }
-
     /// Set the physical block.
     pub fn set_physical_nr(
         &mut self,
         block_nr: LogicalNr,
         block_pnr: PhysicalNr,
     ) -> Result<(), Error> {
+        debug_assert!({
+            'll: {
+                for block in &self.blocks {
+                    for (nr, pnr) in block.iter_nr() {
+                        if block_pnr == pnr {
+                            eprintln!("pnr {} used for block-nr {}", pnr, nr);
+                            break 'll false;
+                        }
+                    }
+                }
+                true
+            }
+        });
+
         let Some(map) = self.map_mut(block_nr) else {
             return Err(Error::err(FBErrorKind::InvalidBlock(block_nr)));
         };
+
         map.set_physical_nr(block_nr, block_pnr)
     }
 
@@ -173,13 +202,13 @@ impl Physical {
     }
 
     /// Iterate all physical blocks. Adds the dirty flag to the result.
-    pub fn iter_dirty(&self) -> impl Iterator<Item = (LogicalNr, bool)> {
+    pub fn iter_dirty(&self) -> impl Iterator<Item = LogicalNr> {
         struct DirtyIter {
             idx: usize,
-            blocks: Vec<(LogicalNr, bool)>,
+            blocks: Vec<LogicalNr>,
         }
         impl Iterator for DirtyIter {
-            type Item = (LogicalNr, bool);
+            type Item = LogicalNr;
 
             fn next(&mut self) -> Option<Self::Item> {
                 if self.idx >= self.blocks.len() {
@@ -195,7 +224,13 @@ impl Physical {
         let blocks = self
             .blocks
             .iter()
-            .map(|v| (v.block_nr(), v.is_dirty()))
+            .filter_map(|v| {
+                if v.is_dirty() {
+                    Some(v.block_nr())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         DirtyIter { idx: 0, blocks }

@@ -102,7 +102,7 @@ impl Debug for StreamsBlock {
 }
 
 /// Wrapper around UserTypes to get the UserBlockTypes for debug output.
-pub(crate) struct UserStreamsBlock<'a, U>(pub &'a StreamsBlock, pub PhantomData<U>);
+pub struct UserStreamsBlock<'a, U>(pub &'a StreamsBlock, pub PhantomData<U>);
 
 impl<'a, U> Debug for UserStreamsBlock<'a, U>
 where

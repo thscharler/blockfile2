@@ -26,12 +26,33 @@ pub(crate) fn metadata(file: &mut File) -> Result<Metadata, Error> {
 ///
 /// Panic
 /// panics if the block was not allocated or if it isn't the next-to-last block.
+pub(crate) fn store_raw_0(file: &mut File, block: &Block) -> Result<(), Error> {
+    seek_block(file, PhysicalNr(0), block.block_size())?;
+
+    let result = file.write_all(block.data.as_ref());
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) => Err(Error::err(FBErrorKind::StoreRaw(
+            block.block_nr(),
+            PhysicalNr(0),
+            e,
+        ))),
+    }
+}
+
+/// Write a block to storage.
+///
+/// Panic
+/// panics if the block was not allocated or if it isn't the next-to-last block.
 pub(crate) fn store_raw(
     file: &mut File,
     physical_block: PhysicalNr,
     block: &Block,
 ) -> Result<(), Error> {
+    assert_ne!(physical_block, PhysicalNr(0));
+
     seek_block(file, physical_block, block.block_size())?;
+
     let result = file.write_all(block.data.as_ref());
     match result {
         Ok(v) => Ok(v),
@@ -69,6 +90,7 @@ pub(crate) fn load_raw(
     block: &mut Block,
 ) -> Result<(), Error> {
     assert_ne!(physical_block, PhysicalNr(0));
+
     seek_block(file, physical_block, block.block_size())?;
 
     let result = file.read_exact(block.data.as_mut());

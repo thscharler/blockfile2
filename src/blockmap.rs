@@ -1,5 +1,5 @@
 use crate::{Error, FBErrorKind, LogicalNr, PhysicalNr, UserBlockType};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fs::File;
 use std::io;
@@ -9,21 +9,19 @@ mod block;
 pub(crate) mod block_io;
 mod blocktype;
 mod header;
-mod physical;
+pub(crate) mod physical;
 mod stream;
-mod types;
+pub(crate) mod types;
 
 use physical::Physical;
 use types::Types;
 
-pub use block::{alloc_box_buffer, Block};
+pub use block::{alloc_box_buffer, Block, HeaderArray, HeaderArrayMut, UserBlock};
 pub use blocktype::BlockType;
 pub use header::{HeaderBlock, State};
 pub use physical::PhysicalBlock;
-pub use stream::StreamsBlock;
-pub(crate) use stream::UserStreamsBlock;
-pub use types::TypesBlock;
-pub(crate) use types::UserTypes;
+pub use stream::{StreamsBlock, UserStreamsBlock};
+pub use types::{TypesBlock, UserTypesBlock};
 
 pub const _INIT_HEADER_NR: LogicalNr = LogicalNr(0);
 pub const _INIT_TYPES_NR: LogicalNr = LogicalNr(1);
@@ -141,10 +139,11 @@ impl Alloc {
     pub fn store(&mut self) -> Result<(), Error> {
         self.generation += 1;
 
+        // is a new file?
         if block_io::metadata(&mut self.file)?.len() == 0 {
             // Write default header.
             let default = HeaderBlock::init(self.block_size);
-            block_io::store_raw(&mut self.file, PhysicalNr(0), &default.0)?;
+            block_io::store_raw_0(&mut self.file, &default.0)?;
         }
 
         #[cfg(debug_assertions)]
@@ -153,15 +152,13 @@ impl Alloc {
         }
 
         // write user blocks.
-        for (block_nr, block) in &mut self.user {
-            if block.is_dirty() {
-                let new_pnr = self.physical.pop_free();
-                self.physical.set_physical_nr(*block_nr, new_pnr)?;
+        for (block_nr, block) in self.user.iter_mut().filter(|(_k, v)| v.is_dirty()) {
+            let new_pnr = self.physical.pop_free();
+            self.physical.set_physical_nr(*block_nr, new_pnr)?;
 
-                block_io::store_raw(&mut self.file, new_pnr, block)?;
-                block.set_dirty(false);
-                block.set_generation(self.generation);
-            }
+            block_io::store_raw(&mut self.file, new_pnr, block)?;
+            block.set_dirty(false);
+            block.set_generation(self.generation);
         }
 
         #[cfg(debug_assertions)]
@@ -185,18 +182,14 @@ impl Alloc {
         }
 
         // write block-types.
-        for (block_nr, is_dirty) in self.types.iter_dirty() {
-            let block_pnr = self.physical.physical_nr(block_nr)?;
+        for block_nr in self.types.iter_dirty() {
+            let new_pnr = self.physical.pop_free();
+            self.physical.set_physical_nr(block_nr, new_pnr)?;
 
-            if is_dirty || block_pnr == 0 {
-                let new_pnr = self.physical.pop_free();
-                self.physical.set_physical_nr(block_nr, new_pnr)?;
-
-                let block = self.types.blockmap_mut(block_nr)?;
-                block_io::store_raw(&mut self.file, new_pnr, &block.0)?;
-                block.set_dirty(false);
-                block.0.set_generation(self.generation);
-            }
+            let map_block = self.types.blockmap_mut(block_nr)?;
+            block_io::store_raw(&mut self.file, new_pnr, &map_block.0)?;
+            map_block.set_dirty(false);
+            map_block.0.set_generation(self.generation);
         }
 
         #[cfg(debug_assertions)]
@@ -204,15 +197,10 @@ impl Alloc {
             panic!("invoke store_panic 4");
         }
 
-        // assign physical block to physical block-maps before writing any of them.
-        for (block_nr, is_dirty) in self.physical.iter_dirty() {
-            let block_pnr = self.physical.physical_nr(block_nr)?;
-            if is_dirty || block_pnr == 0 {
-                let new_pnr = self.physical.pop_free();
-                self.physical.set_physical_nr(block_nr, new_pnr)?;
-                let block = self.physical.blockmap_mut(block_nr)?;
-                block.set_dirty(true);
-            }
+        // Assign physical block to physical block-maps before writing any of them.
+        for block_nr in self.physical.iter_dirty() {
+            let new_pnr = self.physical.pop_free();
+            self.physical.set_physical_nr(block_nr, new_pnr)?;
         }
 
         #[cfg(debug_assertions)]
@@ -222,16 +210,15 @@ impl Alloc {
 
         // writing the physical maps is the last thing. now every block
         // including the physical maps should have a physical-block assigned.
-        for (block_nr, is_dirty) in self.physical.iter_dirty() {
+        for block_nr in self.physical.iter_dirty() {
             let block_pnr = self.physical.physical_nr(block_nr)?;
             debug_assert_ne!(block_pnr.as_u32(), 0);
 
-            if is_dirty {
-                let block = self.physical.blockmap_mut(block_nr)?;
-                block_io::store_raw(&mut self.file, block_pnr, &block.0)?;
-                block.set_dirty(false);
-                block.0.set_generation(self.generation);
-            }
+            let map_block = self.physical.blockmap_mut(block_nr)?;
+            block_io::store_raw(&mut self.file, block_pnr, &map_block.0)?;
+            map_block.set_dirty(false);
+
+            map_block.0.set_generation(self.generation);
         }
 
         #[cfg(debug_assertions)]
@@ -240,15 +227,15 @@ impl Alloc {
         }
 
         // write root blocks
-        let block_1_pnr = self.physical.physical_nr(_INIT_TYPES_NR)?;
-        let block_2_pnr = self.physical.physical_nr(_INIT_PHYSICAL_NR)?;
-        let block_3_pnr = self.physical.physical_nr(_INIT_STREAM_NR)?;
+        let ty_pnr = self.physical.physical_nr(_INIT_TYPES_NR)?;
+        let phy_pnr = self.physical.physical_nr(_INIT_PHYSICAL_NR)?;
+        let st_pnr = self.physical.physical_nr(_INIT_STREAM_NR)?;
 
         // flip state.
         match self.header.state() {
             State::Low => {
                 self.header
-                    .store_high(&mut self.file, block_1_pnr, block_2_pnr, block_3_pnr)?;
+                    .store_high(&mut self.file, ty_pnr, phy_pnr, st_pnr)?;
                 block_io::sync(&mut self.file)?;
 
                 #[cfg(debug_assertions)]
@@ -261,7 +248,7 @@ impl Alloc {
             }
             State::High => {
                 self.header
-                    .store_low(&mut self.file, block_1_pnr, block_2_pnr, block_3_pnr)?;
+                    .store_low(&mut self.file, ty_pnr, phy_pnr, st_pnr)?;
                 block_io::sync(&mut self.file)?;
 
                 #[cfg(debug_assertions)]
@@ -280,7 +267,8 @@ impl Alloc {
         }
 
         // Rebuild the list of free physical pages.
-        self.physical.init_free_list();
+        let file_size = block_io::metadata(&mut self.file)?.len();
+        self.physical.init_free_list(file_size);
 
         // Clean cache.
         self.retain_blocks(|_k, v| !v.is_discard());
@@ -432,10 +420,13 @@ impl Alloc {
 
     /// Free a block.
     pub fn free_block(&mut self, block_nr: LogicalNr) -> Result<(), Error> {
-        // todo: maybe clear on disk too?
         self.user.remove(&block_nr);
-        self.types.free_block(block_nr)?;
-        self.physical.free_block(block_nr)?;
+
+        self.types.set_block_type(block_nr, BlockType::Free)?;
+        self.types.push_free(block_nr);
+
+        self.physical.set_physical_nr(block_nr, PhysicalNr(0))?;
+
         Ok(())
     }
 
@@ -569,6 +560,9 @@ impl Alloc {
             .next();
 
         let block_nr = if let Some(block_nr) = block_nr {
+            let block = self.block_mut(block_nr, block_align)?;
+            block.set_dirty(true);
+            block.set_discard(true);
             block_nr
         } else {
             let block_nr = self.alloc_block(block_type, block_align)?;
